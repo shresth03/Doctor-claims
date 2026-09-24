@@ -1,0 +1,741 @@
+{
+  "name": "Claims 03 \u00b7 Regenerate claim",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "claims/regenerate",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "http://localhost:5180"
+        }
+      },
+      "id": "90ca64fa-bb04-5254-824a-193cb21c6050",
+      "name": "Regenerate requested",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "d54ea63a-d7e5-5095-89cb-c09d1febf32b",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "Frontend webhook auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body ?? $input.first().json;\nconst errors = [];\nfor (const k of ['claimId', 'visitId', 'idempotencyKey', 'requestedBy']) if (!b[k] || typeof b[k] !== 'string') errors.push(`${k} is required`);\nreturn [{ json: {\n  valid: errors.length === 0, errors,\n  claimId: b.claimId, visitId: b.visitId, requestedBy: b.requestedBy, idempotencyKey: b.idempotencyKey,\n  run_id: `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,\n} }];"
+      },
+      "id": "7fe85c97-1fa5-5e63-8400-d4d8e13bca56",
+      "name": "Validate request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "bac52968-a662-5b5c-917c-04d771c392e2",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "5ff3794c-947a-5a93-9347-b14ef29ad3f4",
+      "name": "Request valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ code: 'bad_request', message: $json.errors.join('; ') }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "797cf731-f6ca-5a41-b6f4-21c013864670",
+      "name": "Respond bad request",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        510
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT run_id, state FROM regen_locks WHERE visit_id = $1 AND idem_key = $2 AND state IN ('requested', 'running')",
+        "options": {
+          "queryReplacement": "={{ [ $json.visitId, $json.idempotencyKey ] }}"
+        }
+      },
+      "id": "60c4438e-897d-5e72-8257-ffda22c5b1b1",
+      "name": "Idempotent replay?",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        780,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "bbe954ef-73b8-5f5a-a339-ed82de41e6c2",
+              "leftValue": "={{ !!$json.run_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "31d1d9c7-1862-50c3-a990-420cb7689b5b",
+      "name": "Replay found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ runId: $json.run_id, lock: $json.state }) }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "00ca8dc9-53f5-5e70-a86c-e38dadae35a1",
+      "name": "Respond replay",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1300,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO regen_locks (visit_id, claim_id, state, run_id, idem_key, requested_by, updated_at)\nVALUES ($1, $2, 'requested', $3, $4, $5, now())\nON CONFLICT (visit_id) DO UPDATE SET\n  state = 'requested', claim_id = EXCLUDED.claim_id, run_id = EXCLUDED.run_id,\n  idem_key = EXCLUDED.idem_key, requested_by = EXCLUDED.requested_by, updated_at = now()\nWHERE regen_locks.state NOT IN ('requested', 'running') OR regen_locks.updated_at < now() - interval '15 minutes'\nRETURNING run_id",
+        "options": {
+          "queryReplacement": "={{ [ $('Validate request').first().json.visitId, $('Validate request').first().json.claimId, $('Validate request').first().json.run_id, $('Validate request').first().json.idempotencyKey, $('Validate request').first().json.requestedBy ] }}"
+        }
+      },
+      "id": "b62813f4-c379-552a-9f45-3a9773c63cce",
+      "name": "Acquire lock",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1300,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "8b0be828-fdbb-531d-99fe-461b36502414",
+              "leftValue": "={{ !!$json.run_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "78a788c8-4a16-5554-99c4-a66b6f2cfb02",
+      "name": "Lock acquired?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1560,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ code: 'regeneration_locked', message: 'Another regeneration is already in progress for this visit.' }) }}",
+        "options": {
+          "responseCode": 409
+        }
+      },
+      "id": "cf5c4dfb-8009-5e79-bbd6-4d14ba06ea95",
+      "name": "Respond locked",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1820,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ runId: $('Validate request').first().json.run_id, lock: 'requested' }) }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "6f2f3a2f-f499-5777-9e24-3068e17c3b66",
+      "name": "Respond accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1820,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH u AS (\n  UPDATE regen_locks SET state = 'running', updated_at = now() WHERE visit_id = $1 AND run_id = $2 RETURNING run_id\n), a AS (\n  INSERT INTO audit_events (actor, actor_type, event, entity, claim_id, visit_id, run_id, metadata)\n  VALUES ($3::text, 'doctor', 'Regeneration requested', 'Claim ' || $4::text, $4::text, $1::text, $2::text, jsonb_build_object('idempotency_key', $5::text))\n  RETURNING id\n) SELECT (SELECT run_id FROM u) AS run_id",
+        "options": {
+          "queryReplacement": "={{ [ $('Validate request').first().json.visitId, $('Validate request').first().json.run_id, $('Validate request').first().json.requestedBy, $('Validate request').first().json.claimId, $('Validate request').first().json.idempotencyKey ] }}"
+        }
+      },
+      "id": "dfa61286-6cd3-5547-90b2-bb05dc686e7b",
+      "name": "Mark running",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2080,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVENT_RELAY_URL }}/events",
+        "options": {
+          "timeout": 8000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.EVENT_RELAY_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ events: [{ type: 'regeneration.running', claimId: $('Validate request').first().json.claimId, runId: $('Validate request').first().json.run_id }] }) }}"
+      },
+      "id": "12649593-3e2a-5ce4-b2ca-d54aaf5e41b6",
+      "name": "Push running event",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2340,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const v = $('Validate request').first().json;\nreturn [{ json: { visit_id: v.visitId, claim_id: v.claimId, mode: 'regenerate', run_id: v.run_id, requested_by: v.requestedBy } }];"
+      },
+      "id": "b8617865-9555-5c23-b78e-8b29f71f5dae",
+      "name": "Prepare core input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2600,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": "claimsDraftCore01",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "a1671a72-221d-5029-949d-ef3407826fbb",
+      "name": "Run draft core",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        2860,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "d9c1ad14-5cda-587d-89ae-b7648d9463b0",
+              "leftValue": "={{ $json.ok === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "39255a29-911d-587a-896d-9ba2c147aef0",
+      "name": "Regeneration succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3120,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const v = $('Validate request').first().json;\nconst r = $json;\nreturn [{ json: { events: [{ type: 'regeneration.completed', claimId: v.claimId, draft: r.draft }], version_label: r.version_label } }];"
+      },
+      "id": "760484a3-c95a-5640-94c2-4475fc52057d",
+      "name": "Build completed event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3380,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH u AS (\n  UPDATE regen_locks SET state = 'completed', updated_at = now() WHERE visit_id = $1 AND run_id = $2 RETURNING run_id\n), a AS (\n  INSERT INTO audit_events (actor, actor_type, event, entity, claim_id, visit_id, run_id, version, metadata)\n  VALUES ('Workflow Engine', 'system', 'Regeneration completed', 'Claim ' || $3::text, $3::text, $1::text, $2::text, $4::text,\n          jsonb_build_object('new_draft', $4::text, 'review_required', 'true'))\n  RETURNING id\n) SELECT (SELECT run_id FROM u) AS run_id",
+        "options": {
+          "queryReplacement": "={{ [ $('Validate request').first().json.visitId, $('Validate request').first().json.run_id, $('Validate request').first().json.claimId, $json.version_label ] }}"
+        }
+      },
+      "id": "15422b93-5252-56d9-b0f4-ea2b34ab668b",
+      "name": "Complete lock + audit",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3640,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVENT_RELAY_URL }}/events",
+        "options": {
+          "timeout": 8000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.EVENT_RELAY_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ events: $('Build completed event').first().json.events }) }}"
+      },
+      "id": "ff8eb650-5d13-5cd9-93c1-c5dcc6b883e3",
+      "name": "Push completed event",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3900,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const v = $('Validate request').first().json;\nconst message = $json.detail ?? $json.error?.message ?? 'The regeneration workflow failed unexpectedly. The previous draft is unchanged.';\nreturn [{ json: { message, events: [{ type: 'regeneration.failed', claimId: v.claimId, runId: v.run_id, message }] } }];"
+      },
+      "id": "ddd85f85-5d58-5cce-9847-1317eb766d04",
+      "name": "Build failed event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3380,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH u AS (\n  UPDATE regen_locks SET state = 'failed', updated_at = now() WHERE visit_id = $1 AND run_id = $2 RETURNING run_id\n), a AS (\n  INSERT INTO audit_events (actor, actor_type, event, entity, claim_id, visit_id, run_id, metadata)\n  VALUES ('Workflow Engine', 'system', 'Regeneration failed', 'Claim ' || $3::text, $3::text, $1::text, $2::text, jsonb_build_object('error', $4::text))\n  RETURNING id\n) SELECT (SELECT run_id FROM u) AS run_id",
+        "options": {
+          "queryReplacement": "={{ [ $('Validate request').first().json.visitId, $('Validate request').first().json.run_id, $('Validate request').first().json.claimId, $('Build failed event').first().json.message ] }}"
+        }
+      },
+      "id": "1bd6f69c-29a7-5456-9434-36cae3d8f929",
+      "name": "Fail lock + audit",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3640,
+        340
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVENT_RELAY_URL }}/events",
+        "options": {
+          "timeout": 8000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.EVENT_RELAY_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ events: $('Build failed event').first().json.events }) }}"
+      },
+      "id": "1845b4d5-75a2-55eb-a09d-13eda20ae20f",
+      "name": "Push failed event",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3900,
+        340
+      ],
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Regenerate requested": {
+      "main": [
+        [
+          {
+            "node": "Validate request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate request": {
+      "main": [
+        [
+          {
+            "node": "Request valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request valid?": {
+      "main": [
+        [
+          {
+            "node": "Idempotent replay?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond bad request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idempotent replay?": {
+      "main": [
+        [
+          {
+            "node": "Replay found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Replay found?": {
+      "main": [
+        [
+          {
+            "node": "Respond replay",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Acquire lock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Acquire lock": {
+      "main": [
+        [
+          {
+            "node": "Lock acquired?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lock acquired?": {
+      "main": [
+        [
+          {
+            "node": "Respond accepted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond locked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond accepted": {
+      "main": [
+        [
+          {
+            "node": "Mark running",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark running": {
+      "main": [
+        [
+          {
+            "node": "Push running event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Push running event": {
+      "main": [
+        [
+          {
+            "node": "Prepare core input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare core input": {
+      "main": [
+        [
+          {
+            "node": "Run draft core",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run draft core": {
+      "main": [
+        [
+          {
+            "node": "Regeneration succeeded?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Regeneration succeeded?": {
+      "main": [
+        [
+          {
+            "node": "Build completed event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build failed event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build completed event": {
+      "main": [
+        [
+          {
+            "node": "Complete lock + audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Complete lock + audit": {
+      "main": [
+        [
+          {
+            "node": "Push completed event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build failed event": {
+      "main": [
+        [
+          {
+            "node": "Fail lock + audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fail lock + audit": {
+      "main": [
+        [
+          {
+            "node": "Push failed event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

@@ -1,0 +1,441 @@
+{
+  "name": "Claims 06 \u00b7 Documentation SLA sweep (cron)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/15 * * * *"
+            }
+          ]
+        }
+      },
+      "id": "67bbdfd7-d297-5a78-a98b-22ef95852a80",
+      "name": "Every 15 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE doc_requests SET status = 'sla_breach'\nWHERE status NOT IN ('submitted', 'sla_breach') AND due_at < now()\nRETURNING request_id, claim_id, insurer, priority,\n  EXTRACT(EPOCH FROM (now() - received_at)) / 86400 AS days_open, (escalated_at IS NOT NULL) AS already_escalated",
+        "options": {
+          "queryReplacement": "={{ [] }}"
+        }
+      },
+      "id": "0796315e-ec40-502b-87d5-1471e8d4510c",
+      "name": "Mark breached",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map((i) => i.json);\nconst newlyBreached = rows.filter((r) => !r.already_escalated);\nconst urgent = newlyBreached.filter((r) => r.days_open >= 5);\nreturn [{ json: { newlyBreached, urgent, hasAny: rows.length > 0 } }];"
+      },
+      "id": "112eeef6-b70f-57bd-ad7c-75f1caf5e09c",
+      "name": "Split breach vs escalation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "463f03ea-38f6-5f8b-a7bf-4f5049e0f696",
+              "leftValue": "={{ $json.hasAny }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "6bf1008e-603d-5783-8a25-85837138a5fc",
+      "name": "Any breached?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE doc_requests SET escalated_at = now() WHERE request_id = ANY($1::text[]) RETURNING request_id",
+        "options": {
+          "queryReplacement": "={{ [ $json.newlyBreached.map((r) => r.request_id) ] }}"
+        }
+      },
+      "id": "20c98057-381b-5946-a7de-446fd44ae9b2",
+      "name": "Mark escalated",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1040,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const s = $('Split breach vs escalation').first().json;\nconst now = new Date().toISOString();\nconst notifications = s.newlyBreached.map((r) => ({\n  kind: 'sla_breach', severity: r.days_open >= 5 ? 'critical' : 'warning', title: 'Documentation SLA breach',\n  message: r.days_open >= 5\n    ? `Request ${r.request_id} for claim ${r.claim_id} (${r.insurer}) has been unanswered for ${Math.floor(r.days_open)}+ days. Escalating.`\n    : `Request ${r.request_id} for claim ${r.claim_id} (${r.insurer}) is now overdue.`,\n  claim_id: r.claim_id, ref_id: r.request_id,\n}));\nconst audit_rows = s.newlyBreached.map((r) => ({\n  ts: now, actor: 'Workflow Engine', actor_type: 'system', event: 'Documentation SLA breach detected',\n  entity: `Doc request ${r.request_id}`, claim_id: r.claim_id, visit_id: null, patient_id: null, code: null,\n  previous_value: null, new_value: 'sla_breach', run_id: 'cron_sla_sweep', version: null,\n  metadata: { insurer: r.insurer, days_open: String(Math.floor(r.days_open)), urgent: String(r.days_open >= 5) },\n}));\nreturn [{ json: { notifications, audit_rows, urgent: s.urgent } }];"
+      },
+      "id": "fb9315a2-bc5b-5790-9631-75e79f283fde",
+      "name": "Build notifications + audit",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ins AS (\n  INSERT INTO notifications (kind, severity, title, message, claim_id, ref_id)\n  SELECT kind, severity, title, message, claim_id, ref_id\n  FROM jsonb_to_recordset($1::jsonb) AS x(kind text, severity text, title text, message text, claim_id text, ref_id text)\n  RETURNING id, kind, severity, title, message, claim_id, created_at\n)\nSELECT COALESCE(jsonb_agg(to_jsonb(ins)), '[]'::jsonb) AS rows FROM ins",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json.notifications)] }}"
+        }
+      },
+      "id": "245acada-75e0-58b6-b8e2-d26b56246b3d",
+      "name": "Write notifications",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1560,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ins AS (\n  INSERT INTO audit_events (ts, actor, actor_type, event, entity, claim_id, visit_id, patient_id, code, previous_value, new_value, run_id, version, metadata)\n  SELECT COALESCE(ts::timestamptz, now()), actor, actor_type, event, entity, claim_id, visit_id, patient_id, code, previous_value, new_value, run_id, version, COALESCE(metadata, '{}'::jsonb)\n  FROM jsonb_to_recordset($1::jsonb) AS x(ts text, actor text, actor_type text, event text, entity text, claim_id text, visit_id text, patient_id text, code text, previous_value text, new_value text, run_id text, version text, metadata jsonb)\n  RETURNING id\n)\nSELECT count(*)::int AS written FROM ins",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($('Build notifications + audit').first().json.audit_rows)] }}"
+        }
+      },
+      "id": "d168c1ac-937e-5199-ac4e-27c2d266fc6e",
+      "name": "Write audit",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1820,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { events: ($json.rows ?? []).map((r) => ({ type: 'notification.created', notification: { id: `NTF-${r.id}`, kind: r.kind, severity: r.severity, title: r.title, message: r.message, claimId: r.claim_id ?? undefined, createdAt: r.created_at } })) } }];"
+      },
+      "id": "d0c43719-550f-5a8e-a266-5479e11f950b",
+      "name": "Build UI events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2080,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVENT_RELAY_URL }}/events",
+        "options": {
+          "timeout": 8000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.EVENT_RELAY_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ events: $json.events }) }}"
+      },
+      "id": "1290a0f8-706c-5a6d-b857-57fbe13d0f00",
+      "name": "Push events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2340,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "b013d161-6be0-5bf9-9625-ccf601bd6e7c",
+              "leftValue": "={{ ($('Build notifications + audit').first().json.urgent ?? []).length > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "52fc85db-b63d-5da5-94d0-fddb896ee9d6",
+      "name": "Any urgent (5+ days)?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1560,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "options": {
+          "timeout": 8000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: ':rotating_light: *Documentation SLA breach (5+ days)*\\n' +\n  $('Build notifications + audit').first().json.urgent.map((r) => `\u2022 Claim ${r.claim_id} \u2014 ${r.insurer} \u2014 ${Math.floor(r.days_open)}d open (request ${r.request_id})`).join('\\n') }) }}"
+      },
+      "id": "297a55f8-d82e-5149-9d65-02d1990b8ed1",
+      "name": "Post to Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1820,
+        340
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EMAIL_API_URL }}/send",
+        "options": {
+          "timeout": 8000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ to: $env.COMPLIANCE_ESCALATION_EMAIL, subject: `${$('Build notifications + audit').first().json.urgent.length} documentation request(s) breached SLA by 5+ days`,\n  text: $('Build notifications + audit').first().json.urgent.map((r) => `Claim ${r.claim_id} (${r.insurer}), request ${r.request_id}, open ${Math.floor(r.days_open)} days.`).join('\\n') }) }}"
+      },
+      "id": "be324b9f-a2a8-5663-b2ab-0856edd25abe",
+      "name": "Send escalation email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2080,
+        340
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "Email API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Every 15 minutes": {
+      "main": [
+        [
+          {
+            "node": "Mark breached",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark breached": {
+      "main": [
+        [
+          {
+            "node": "Split breach vs escalation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split breach vs escalation": {
+      "main": [
+        [
+          {
+            "node": "Any breached?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any breached?": {
+      "main": [
+        [
+          {
+            "node": "Mark escalated",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Any urgent (5+ days)?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark escalated": {
+      "main": [
+        [
+          {
+            "node": "Build notifications + audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build notifications + audit": {
+      "main": [
+        [
+          {
+            "node": "Write notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write notifications": {
+      "main": [
+        [
+          {
+            "node": "Write audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write audit": {
+      "main": [
+        [
+          {
+            "node": "Build UI events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build UI events": {
+      "main": [
+        [
+          {
+            "node": "Push events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any urgent (5+ days)?": {
+      "main": [
+        [
+          {
+            "node": "Post to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post to Slack": {
+      "main": [
+        [
+          {
+            "node": "Send escalation email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

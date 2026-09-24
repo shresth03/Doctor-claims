@@ -1,0 +1,257 @@
+{
+  "name": "Claims 07 \u00b7 Validate replacement code",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "claims/validate-code",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "http://localhost:5180"
+        }
+      },
+      "id": "d6c570db-1242-5788-9d1b-5b39a63c2325",
+      "name": "Validate code requested",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "30dd0be4-b663-51b3-8832-8e346fe50ced",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "Frontend webhook auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body ?? $input.first().json;\nconst errors = [];\nfor (const k of ['claimId', 'visitId', 'code']) if (!b[k] || typeof b[k] !== 'string') errors.push(`${k} is required`);\nreturn [{ json: { valid: errors.length === 0, errors, claimId: b.claimId, visitId: b.visitId, code: String(b.code ?? '').trim().toUpperCase() } }];"
+      },
+      "id": "83e3b227-576a-5d06-8bd2-daa2f91aa27f",
+      "name": "Validate request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "a66634cb-331f-503c-b0a4-d9be5a8796d0",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1469577c-3855-5550-b1fe-58b0265144dd",
+      "name": "Request valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ code: 'bad_request', message: $json.errors.join('; ') }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "b85d631b-e570-5a2c-a4e1-dcf9fffb92bf",
+      "name": "Respond bad request",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        170
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT d.payload->'codes'->0->'validation' AS gates\nFROM claims c JOIN claim_drafts d ON d.claim_id = c.claim_id AND d.version = c.latest_version AND d.kind = 'draft'\nWHERE c.claim_id = $1",
+        "options": {
+          "queryReplacement": "={{ [ $json.claimId ] }}"
+        }
+      },
+      "id": "1f307899-2075-5ff0-9736-a591fb056137",
+      "name": "Load draft gates",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        780,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CODE_CATALOG_URL }}/lookup",
+        "options": {
+          "timeout": 30000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ codes: [$('Validate request').first().json.code] }) }}"
+      },
+      "id": "3f9a242b-68ac-59d9-a93a-9fe553dc4bc3",
+      "name": "Catalog lookup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1040,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "Code catalog API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const req = $('Validate request').first().json;\nconst stored = $('Load draft gates').first().json;\nconst cat = $input.first().json;\nconst code = req.code;\nconst isCpt = /^\\d{5}$/.test(code);\nconst isIcd = /^[A-TV-Z]\\d{2}(\\.[A-Z0-9]{1,4})?$/.test(code);\nconst entry = cat.error ? undefined : cat.codes?.[code];\nconst base = Array.isArray(stored.gates) ? stored.gates : [];\nconst carry = (key, label) => base.find((g) => g.key === key) ?? { key, label, status: 'unavailable', detail: 'This check could not be repeated for the current draft.' };\n\nlet doc;\nconst mk = (status, detail) => ({ key: 'documentation_requirement', label: 'Documentation requirement', status, detail });\nif (!isCpt && !isIcd) doc = mk('failed', `\"${code}\" is not a recognised CPT or ICD-10 code format.`);\nelse if (cat.error) doc = mk('unavailable', 'The code catalog did not respond, so the code could not be verified.');\nelse if (!entry) doc = mk('failed', `Code ${code} was not found in the code catalog.`);\nelse doc = mk('warning', 'Replacement entered by the doctor. Supporting evidence has not been machine-verified against the note.');\n\nreturn [{ json: {\n  category: entry?.category ?? (isCpt ? 'CPT' : 'ICD-10'),\n  description: entry?.description ?? 'Unrecognised code',\n  validation: [doc, carry('signed_note', 'Signed note'), carry('billable_event', 'Billable event'), carry('active_policy', 'Active policy')],\n} }];"
+      },
+      "id": "f1cc3a1f-8feb-5c4b-aab1-1998dfd69c05",
+      "name": "Build gates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "dacc8419-1716-50aa-b54f-09636f23b8f6",
+      "name": "Respond gates",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1560,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Validate code requested": {
+      "main": [
+        [
+          {
+            "node": "Validate request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate request": {
+      "main": [
+        [
+          {
+            "node": "Request valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request valid?": {
+      "main": [
+        [
+          {
+            "node": "Load draft gates",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond bad request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load draft gates": {
+      "main": [
+        [
+          {
+            "node": "Catalog lookup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Catalog lookup": {
+      "main": [
+        [
+          {
+            "node": "Build gates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build gates": {
+      "main": [
+        [
+          {
+            "node": "Respond gates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

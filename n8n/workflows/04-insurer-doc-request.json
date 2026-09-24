@@ -1,0 +1,398 @@
+{
+  "name": "Claims 04 \u00b7 Insurer documentation request received",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "claims/insurer-doc-request",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "cc4649df-6ee7-524b-bec5-5cdf1bd749c0",
+      "name": "Insurer request received",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "8de83237-1dba-59eb-9825-7364d7ca11f0",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "Inbound system webhook auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body ?? $input.first().json;\nconst errors = [];\nfor (const k of ['request_id', 'claim_id', 'insurer', 'request_type', 'due_at']) if (!b[k]) errors.push(`${k} is required`);\nreturn [{ json: {\n  valid: errors.length === 0, errors,\n  request_id: String(b.request_id ?? ''), claim_id: String(b.claim_id ?? ''), insurer: b.insurer,\n  patient_id: b.patient_id ?? null, request_type: b.request_type, requested_docs: b.requested_docs ?? [],\n  priority: b.priority ?? 'normal', received_at: b.received_at ?? new Date().toISOString(), due_at: b.due_at,\n  run_id: `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,\n} }];"
+      },
+      "id": "e185a246-8370-500c-9684-21ccc5209e7d",
+      "name": "Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "1ea84136-e2ff-593f-a1da-c82e19f8555c",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "92f8640c-0be3-56cf-b0c4-9b9e218a6809",
+      "name": "Payload valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ code: 'bad_request', message: $json.errors.join('; ') }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "ee749791-dc1b-54d0-a559-649a9faddb20",
+      "name": "Respond bad request",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        170
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO dedup_keys (key, meta) VALUES ($1, $2::jsonb) ON CONFLICT (key) DO NOTHING RETURNING key",
+        "options": {
+          "queryReplacement": "={{ [ $json.claim_id + '+' + $json.request_id, JSON.stringify({ source: 'insurer-doc-request' }) ] }}"
+        }
+      },
+      "id": "4ad97441-3185-5ca4-adf4-a3ba0e42c68f",
+      "name": "Dedup gate",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        780,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "30501a22-6c05-529b-ade1-c9f3216715c1",
+              "leftValue": "={{ !!$json.key }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "74e42eb1-e01b-599b-86b0-ea9102d2b71c",
+      "name": "First delivery?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'duplicate_suppressed' }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "4216eecb-3918-5183-a2e7-d6f1ec3bb177",
+      "name": "Respond duplicate",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1300,
+        170
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_events (actor, actor_type, event, entity, claim_id, metadata)\nVALUES ('Workflow Engine', 'system', 'Duplicate trigger suppressed', 'Doc request ' || $1::text, $2::text,\n        jsonb_build_object('dedup_key', $2::text || '+' || $1::text, 'suppressed_by', 'claim_id + request_id'))",
+        "options": {
+          "queryReplacement": "={{ [ $('Normalize').first().json.request_id, $('Normalize').first().json.claim_id ] }}"
+        }
+      },
+      "id": "c3bb2a54-4fb7-55ab-84c9-a9f40b8e841b",
+      "name": "Audit duplicate",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1560,
+        170
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'accepted' }) }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "12485ae9-ef26-5d44-991e-14ca1961d068",
+      "name": "Respond accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1300,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ins AS (\n  INSERT INTO doc_requests (request_id, claim_id, insurer, patient_id, request_type, requested_docs, priority, status, received_at, due_at)\n  VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, 'new', $8::timestamptz, $9::timestamptz)\n  RETURNING request_id\n), n AS (\n  INSERT INTO notifications (kind, severity, title, message, claim_id, ref_id)\n  VALUES ('sla_breach', CASE WHEN $7 = 'urgent' THEN 'critical' ELSE 'info' END, 'New documentation request',\n          'Insurer ' || $3::text || ' requested ' || $5::text || ' for claim ' || $2::text || '.', $2, $1)\n  RETURNING id, kind, severity, title, message, claim_id, created_at\n), a AS (\n  INSERT INTO audit_events (actor, actor_type, event, entity, claim_id, run_id, metadata)\n  VALUES ('Workflow Engine', 'system', 'Insurer documentation request received', 'Doc request ' || $1::text, $2, $10,\n          jsonb_build_object('insurer', $3::text, 'request_type', $5::text, 'priority', $7::text, 'due_at', $9::text))\n  RETURNING id\n)\nSELECT COALESCE((SELECT to_jsonb(n) FROM n), '{}'::jsonb) AS notification",
+        "options": {
+          "queryReplacement": "={{ [ $json.request_id, $json.claim_id, $json.insurer, $json.patient_id, $json.request_type, JSON.stringify($json.requested_docs), $json.priority, $json.received_at, $json.due_at, $json.run_id ] }}"
+        }
+      },
+      "id": "51e726d7-ac22-517d-b8ad-84ad1d9f1945",
+      "name": "Insert request",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1560,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const n = $('Normalize').first().json;\nconst notif = $json.notification;\nconst events = [{ type: 'doc_request.created', request: { id: n.request_id, claimId: n.claim_id, insurer: n.insurer, requestType: n.request_type, priority: n.priority, dueAt: n.due_at, status: 'new' } }];\nif (notif?.id) events.push({ type: 'notification.created', notification: { id: `NTF-${notif.id}`, kind: notif.kind, severity: notif.severity, title: notif.title, message: notif.message, claimId: notif.claim_id ?? undefined, createdAt: notif.created_at } });\nreturn [{ json: { events } }];"
+      },
+      "id": "81d9dc83-8c07-50c2-9425-04219991c7ac",
+      "name": "Build events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVENT_RELAY_URL }}/events",
+        "options": {
+          "timeout": 8000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.EVENT_RELAY_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ events: $json.events }) }}"
+      },
+      "id": "3c427638-6328-5a85-bc97-231cbe214633",
+      "name": "Push events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2080,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Insurer request received": {
+      "main": [
+        [
+          {
+            "node": "Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize": {
+      "main": [
+        [
+          {
+            "node": "Payload valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Payload valid?": {
+      "main": [
+        [
+          {
+            "node": "Dedup gate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond bad request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedup gate": {
+      "main": [
+        [
+          {
+            "node": "First delivery?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "First delivery?": {
+      "main": [
+        [
+          {
+            "node": "Respond accepted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond duplicate": {
+      "main": [
+        [
+          {
+            "node": "Audit duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond accepted": {
+      "main": [
+        [
+          {
+            "node": "Insert request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert request": {
+      "main": [
+        [
+          {
+            "node": "Build events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build events": {
+      "main": [
+        [
+          {
+            "node": "Push events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

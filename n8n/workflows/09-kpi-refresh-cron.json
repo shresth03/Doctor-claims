@@ -1,0 +1,206 @@
+{
+  "name": "Claims 09 \u00b7 KPI refresh (cron)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/5 * * * *"
+            }
+          ]
+        }
+      },
+      "id": "6786942d-b3c4-5e4d-894d-1f6381fc1a59",
+      "name": "Every 5 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  COALESCE(SUM(changed_count), 0)::int AS changed,\n  COALESCE(SUM(proposed_count), 0)::int AS proposed,\n  COUNT(*)::int AS sample_size\nFROM claim_metrics WHERE submitted_at > now() - interval '30 days'",
+        "options": {
+          "queryReplacement": "={{ [] }}"
+        }
+      },
+      "id": "ff6fce88-ce16-5146-94f4-4f693b0f16e7",
+      "name": "Doctor edit rate (30d)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (submitted_at - note_signed_at)) / 3600) AS median_hours,\n  PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (submitted_at - note_signed_at)) / 3600) AS p90_hours\nFROM claim_metrics WHERE submitted_at > now() - interval '30 days' AND note_signed_at IS NOT NULL",
+        "options": {
+          "queryReplacement": "={{ [] }}"
+        }
+      },
+      "id": "7dfce24e-8dd7-547a-9207-1136593d5047",
+      "name": "Latency (30d)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  (SELECT count(*) FROM claims WHERE draft_generated_at > now() - interval '30 days')::int AS claims_processed_30d,\n  (SELECT count(*) FROM claims WHERE status IN ('pending_review','partially_reviewed'))::int AS pending_doctor_reviews,\n  (SELECT COALESCE(sum(regeneration_count),0) FROM claims WHERE draft_generated_at > now() - interval '30 days')::int AS regeneration_count_30d,\n  (SELECT count(*) FROM audit_events WHERE event = 'Code quarantined \u2014 validation failed' AND ts > now() - interval '30 days')::int AS validation_failures_30d,\n  (SELECT count(*) FROM doc_requests WHERE status NOT IN ('submitted','sla_breach') AND due_at < now() + interval '24 hours')::int AS sla_approaching,\n  (SELECT count(*) FROM audit_events WHERE event = 'Reconciliation discrepancy found' AND ts > now() - interval '30 days')::int AS reconciliation_discrepancies",
+        "options": {
+          "queryReplacement": "={{ [] }}"
+        }
+      },
+      "id": "f144cdb7-4a3d-5229-a91c-80b1ccfed926",
+      "name": "Pipeline counters",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        780,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const edit = $('Doctor edit rate (30d)').first().json;\nconst lat = $('Latency (30d)').first().json;\nconst counts = $('Pipeline counters').first().json;\nconst editRate = edit.proposed > 0 ? edit.changed / edit.proposed : 0;\nconst snapshot = {\n  doctorEditRate: editRate, doctorEditRateSampleSize: edit.sample_size, doctorEditRateBreach: editRate > 0.20,\n  latencyMedianHours: Number(lat.median_hours ?? 0), latencyP90Hours: Number(lat.p90_hours ?? 0), latencyBreach: Number(lat.median_hours ?? 0) > 24,\n  claimsProcessed30d: counts.claims_processed_30d, pendingDoctorReviews: counts.pending_doctor_reviews,\n  regenerationCount30d: counts.regeneration_count_30d, validationFailures30d: counts.validation_failures_30d,\n  slaApproaching: counts.sla_approaching, reconciliationDiscrepancies: counts.reconciliation_discrepancies,\n  generatedAt: new Date().toISOString(),\n  // Denial rate needs a payer remittance feed this pipeline doesn't have yet; left for that integration, not estimated here.\n  denialRateCurrent: null, denialRateBaseline: null, denialRateNote: 'requires payer remittance/835 feed \u2014 not yet integrated',\n};\nreturn [{ json: { events: [{ type: 'kpi.updated', kpi: snapshot }] } }];"
+      },
+      "id": "ae43a7da-a1a0-5f6e-b4fb-b2c21c5cb4ad",
+      "name": "Assemble snapshot",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVENT_RELAY_URL }}/events",
+        "options": {
+          "timeout": 8000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.EVENT_RELAY_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ events: $json.events }) }}"
+      },
+      "id": "86cb8628-84bd-5bcc-8adb-6a1c8e68ab44",
+      "name": "Push KPI event",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Every 5 minutes": {
+      "main": [
+        [
+          {
+            "node": "Doctor edit rate (30d)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Doctor edit rate (30d)": {
+      "main": [
+        [
+          {
+            "node": "Latency (30d)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Latency (30d)": {
+      "main": [
+        [
+          {
+            "node": "Pipeline counters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pipeline counters": {
+      "main": [
+        [
+          {
+            "node": "Assemble snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble snapshot": {
+      "main": [
+        [
+          {
+            "node": "Push KPI event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

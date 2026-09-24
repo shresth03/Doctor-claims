@@ -1,0 +1,426 @@
+{
+  "name": "Claims 08 \u00b7 Nightly reconciliation (cron)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * *"
+            }
+          ]
+        }
+      },
+      "id": "21bfa6d7-7991-587b-b227-16f731f06a70",
+      "name": "Nightly at 02:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT visit_id FROM (\n  SELECT s.visit_id::text AS visit_id\n  FROM (SELECT jsonb_array_elements_text(payload->'signed_visit_ids') AS visit_id FROM (SELECT '{}'::jsonb AS payload) x) s\n) t WHERE false\n-- Placeholder join point: replace with `SELECT visit_id FROM ehr_signed_visits WHERE signed_at < now() - interval '2 hours'\n--   EXCEPT SELECT visit_id FROM claims` once the EHR exposes a signed-visits feed/table to this database.",
+        "options": {
+          "queryReplacement": "={{ [] }}"
+        }
+      },
+      "id": "d0fb0eec-aff2-50ec-be0e-87eab1708c37",
+      "name": "Signed visits without a draft",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.EHR_BASE_URL }}/visits/signed-since?since={{ new Date(Date.now() - 48*3600*1000).toISOString() }}",
+        "options": {
+          "timeout": 30000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "b2bc78bf-267b-53b8-a513-26e022d2abe1",
+      "name": "Fetch signed visits (EHR)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "EHR API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT visit_id FROM claims WHERE visit_id = ANY($1::text[])",
+        "options": {
+          "queryReplacement": "={{ [ ($json.visits ?? []).map((v) => v.visit_id) ] }}"
+        }
+      },
+      "id": "fbd2edcd-a007-52b5-b1fb-31087a2e857f",
+      "name": "Existing claims for those visits",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        780,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const ehr = $('Fetch signed visits (EHR)').first().json;\nconst have = new Set(($input.all() ?? []).map((i) => i.json.visit_id));\nconst signed = ehr.error ? [] : (ehr.visits ?? []);\nconst missing = signed.filter((v) => !have.has(v.visit_id) && (Date.now() - new Date(v.signed_at).getTime()) > 2 * 3600 * 1000);\nconst now = new Date().toISOString();\nreturn [{ json: {\n  missing, ehr_unavailable: !!ehr.error,\n  audit_rows: [{\n    ts: now, actor: 'Workflow Engine', actor_type: 'system', event: 'Reconciliation result recorded',\n    entity: 'Nightly reconciliation', claim_id: null, visit_id: null, patient_id: null, code: null,\n    previous_value: null, new_value: null, run_id: 'cron_reconciliation', version: null,\n    metadata: { signed_visits_checked: String(signed.length), discrepancies_found: String(missing.length), ehr_unavailable: String(!!ehr.error) },\n  }, ...missing.map((v) => ({\n    ts: now, actor: 'Workflow Engine', actor_type: 'system', event: 'Reconciliation discrepancy found',\n    entity: `Visit ${v.visit_id}`, claim_id: null, visit_id: v.visit_id, patient_id: null, code: null,\n    previous_value: null, new_value: null, run_id: 'cron_reconciliation', version: null,\n    metadata: { reason: 'signed note has no drafted claim', signed_at: String(v.signed_at) },\n  }))],\n} }];"
+      },
+      "id": "327dd6f1-4c50-5dd7-9468-dbf9cc1942aa",
+      "name": "Diff",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ins AS (\n  INSERT INTO audit_events (ts, actor, actor_type, event, entity, claim_id, visit_id, patient_id, code, previous_value, new_value, run_id, version, metadata)\n  SELECT COALESCE(ts::timestamptz, now()), actor, actor_type, event, entity, claim_id, visit_id, patient_id, code, previous_value, new_value, run_id, version, COALESCE(metadata, '{}'::jsonb)\n  FROM jsonb_to_recordset($1::jsonb) AS x(ts text, actor text, actor_type text, event text, entity text, claim_id text, visit_id text, patient_id text, code text, previous_value text, new_value text, run_id text, version text, metadata jsonb)\n  RETURNING id\n)\nSELECT count(*)::int AS written FROM ins",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json.audit_rows)] }}"
+        }
+      },
+      "id": "96da7e6c-1ca5-5bd6-a3ad-ff36823b9dcd",
+      "name": "Write audit",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1300,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "2dac441b-ffb2-5d7f-83ce-1ad86fd2428d",
+              "leftValue": "={{ $('Diff').first().json.missing.length > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ab6ec3ca-8fda-58d1-9b3d-f8d851589cb4",
+      "name": "Any discrepancies?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1560,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const missing = $('Diff').first().json.missing;\nreturn [{ json: { notifications: [{\n  kind: 'system', severity: 'warning', title: 'Reconciliation discrepancy',\n  message: `Nightly reconciliation found ${missing.length} signed visit(s) with no drafted claim: ${missing.slice(0, 5).map((v) => v.visit_id).join(', ')}${missing.length > 5 ? '\u2026' : ''}.`,\n  claim_id: null, ref_id: 'reconciliation',\n}] } }];"
+      },
+      "id": "94c6c876-a87a-5fcd-98cc-196eedf2abfa",
+      "name": "Build notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ins AS (\n  INSERT INTO notifications (kind, severity, title, message, claim_id, ref_id)\n  SELECT kind, severity, title, message, claim_id, ref_id\n  FROM jsonb_to_recordset($1::jsonb) AS x(kind text, severity text, title text, message text, claim_id text, ref_id text)\n  RETURNING id, kind, severity, title, message, claim_id, created_at\n)\nSELECT COALESCE(jsonb_agg(to_jsonb(ins)), '[]'::jsonb) AS rows FROM ins",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json.notifications)] }}"
+        }
+      },
+      "id": "55ba0f06-b147-5951-947e-6d79f1968a38",
+      "name": "Write notification",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2080,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { events: ($json.rows ?? []).map((r) => ({ type: 'notification.created', notification: { id: `NTF-${r.id}`, kind: r.kind, severity: r.severity, title: r.title, message: r.message, createdAt: r.created_at } })) } }];"
+      },
+      "id": "505767fa-0563-507c-b454-a5f6475f296a",
+      "name": "Build events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2340,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVENT_RELAY_URL }}/events",
+        "options": {
+          "timeout": 8000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.EVENT_RELAY_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ events: $json.events }) }}"
+      },
+      "id": "a94674ea-6b33-5476-9f04-8f61a192bfda",
+      "name": "Push events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2600,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Feeds each discrepancy back into the normal signed-note pipeline so a draft is generated,\n// instead of duplicating the extraction logic here.\nconst missing = $('Diff').first().json.missing;\nreturn missing.map((v) => ({ json: { visit_id: v.visit_id } }));"
+      },
+      "id": "18ce0886-ef47-5464-92a3-8f449b52072e",
+      "name": "Trigger drafts for missing visits",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SELF_BASE_URL }}/webhook/claims/visit-note-signed",
+        "options": {
+          "timeout": 30000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ visit_id: $json.visit_id }) }}"
+      },
+      "id": "348bf8ea-f54a-5157-96d5-866b3aecd961",
+      "name": "Re-fire visit-note-signed webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3120,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "Inbound system webhook auth"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Nightly at 02:00": {
+      "main": [
+        [
+          {
+            "node": "Signed visits without a draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signed visits without a draft": {
+      "main": [
+        [
+          {
+            "node": "Fetch signed visits (EHR)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch signed visits (EHR)": {
+      "main": [
+        [
+          {
+            "node": "Existing claims for those visits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Existing claims for those visits": {
+      "main": [
+        [
+          {
+            "node": "Diff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Diff": {
+      "main": [
+        [
+          {
+            "node": "Write audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write audit": {
+      "main": [
+        [
+          {
+            "node": "Any discrepancies?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any discrepancies?": {
+      "main": [
+        [
+          {
+            "node": "Build notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Trigger drafts for missing visits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build notification": {
+      "main": [
+        [
+          {
+            "node": "Write notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write notification": {
+      "main": [
+        [
+          {
+            "node": "Build events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build events": {
+      "main": [
+        [
+          {
+            "node": "Push events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger drafts for missing visits": {
+      "main": [
+        [
+          {
+            "node": "Re-fire visit-note-signed webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

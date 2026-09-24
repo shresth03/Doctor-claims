@@ -1,0 +1,748 @@
+{
+  "name": "Claims 00 \u00b7 Draft core (sub-workflow)",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "1a940ceb-49e0-5b09-8e51-4b4ed20e71e1",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.EHR_BASE_URL }}/visits/{{ encodeURIComponent($json.visit_id) }}",
+        "options": {
+          "timeout": 30000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "d2332a44-19aa-554e-9760-67cb02c3cdc1",
+      "name": "Fetch visit & note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "EHR API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.PAYER_BASE_URL }}/eligibility?patient_id={{ encodeURIComponent($('Fetch visit & note').item.json.patient?.id ?? '') }}&service_date={{ encodeURIComponent($('Fetch visit & note').item.json.service_date ?? '') }}",
+        "options": {
+          "timeout": 30000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "ffda3d02-bb87-5050-b0e8-e3f71cb3e944",
+      "name": "Fetch policy status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "Payer API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BILLING_BASE_URL }}/patients/{{ encodeURIComponent($('Fetch visit & note').item.json.patient?.id ?? '') }}/billing-context",
+        "options": {
+          "timeout": 30000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "be002727-fb73-59b0-8fe9-0b0e5b4e34fd",
+      "name": "Fetch billing context",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        780,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "Billing API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Three gates must PASS before any AI work happens. A missing/failed lookup is \"unavailable\", never \"passed\".\nconst input = $('Execute Workflow Trigger').first().json;\nconst visit = $('Fetch visit & note').first().json;\nconst policy = $('Fetch policy status').first().json;\nconst billing = $('Fetch billing context').first().json;\n\nconst errored = (o) => !o || !!o.error;\nconst gate = (key, label, status, detail) => (detail ? { key, label, status, detail } : { key, label, status });\nconst unavailable = (key, label, what) => gate(key, label, 'unavailable', `${what} did not respond, so this check could not be completed.`);\n\nconst note = visit?.note ?? {};\nconst complete = !errored(visit) && note.text && visit.patient?.id && visit.provider?.id;\n\nconst gates = {\n  signed_note: errored(visit) ? unavailable('signed_note', 'Signed note', 'The visit/note service')\n    : !complete ? gate('signed_note', 'Signed note', 'unavailable', 'The visit record is missing the note text, patient or provider.')\n    : note.signed_at ? gate('signed_note', 'Signed note', 'passed')\n    : gate('signed_note', 'Signed note', 'failed', 'The visit note has not been signed.'),\n  active_policy: errored(policy) ? unavailable('active_policy', 'Active policy', 'The eligibility service')\n    : policy.active === true ? gate('active_policy', 'Active policy', 'passed')\n    : policy.active === false ? gate('active_policy', 'Active policy', 'failed', 'Insurance was not active on the date of service.')\n    : gate('active_policy', 'Active policy', 'unavailable', 'The eligibility response did not state whether the policy was active.'),\n  billable_event: errored(visit) ? unavailable('billable_event', 'Billable event', 'The visit/note service')\n    : visit.billable?.qualifies === true ? gate('billable_event', 'Billable event', 'passed')\n    : visit.billable?.qualifies === false ? gate('billable_event', 'Billable event', 'failed', visit.billable?.reason ?? 'This visit does not qualify as a billable event.')\n    : gate('billable_event', 'Billable event', 'unavailable', 'The visit record did not state whether the event is billable.'),\n};\n\nconst proceed = Object.values(gates).every((g) => g.status === 'passed');\nreturn [{ json: {\n  proceed, gates, input,\n  visit: errored(visit) ? null : visit,\n  policy: errored(policy) ? null : policy,\n  billing: errored(billing) ? null : billing,\n  billing_unavailable: errored(billing),\n} }];"
+      },
+      "id": "556724e5-7411-5ce9-a97d-9e3a3b304e9b",
+      "name": "Pre-flight validations",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "d6c7b781-0ca7-5e92-9796-a6ba03a4ea32",
+              "leftValue": "={{ $json.proceed === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "15324185-205c-5930-ab5c-73b598d12b1b",
+      "name": "Pre-flight passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1300,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AI_EXTRACTION_URL }}",
+        "options": {
+          "timeout": 90000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  task: 'extract_diagnoses_and_procedures',\n  note_text: $json.visit.note.text,\n  service_date: $json.visit.service_date,\n  instructions: 'Return only diagnoses and procedures that the note explicitly supports. For every item, give the exact sentence from the note as evidence_quote (verbatim, do not paraphrase) and a confidence between 0 and 1. Do not invent findings.',\n  response_schema: {\n    model: { provider: 'string', name: 'string', version: 'string' },\n    diagnoses: [{ code: 'ICD-10 code', description: 'string', evidence_quote: 'verbatim sentence from the note', confidence: 'number 0-1' }],\n    procedures: [{ code: 'CPT code', description: 'string', evidence_quote: 'verbatim sentence from the note', confidence: 'number 0-1' }]\n  }\n}) }}"
+      },
+      "id": "f7cfe705-56b0-58b0-b8aa-96bb058f52f0",
+      "name": "AI extraction adapter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "AI extraction adapter"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "57a8ef22-75cc-5277-bc74-d94e11a4136d",
+              "leftValue": "={{ !$json.error && ((($json.procedures ?? []).length) + (($json.diagnoses ?? []).length)) > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "da1ee3cd-5159-5a27-9d98-59ec87da6364",
+      "name": "Extraction usable?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1820,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CODE_CATALOG_URL }}/lookup",
+        "options": {
+          "timeout": 30000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ codes: [...new Set([...($('AI extraction adapter').item.json.diagnoses ?? []), ...($('AI extraction adapter').item.json.procedures ?? [])].map((x) => String(x.code ?? '').toUpperCase().trim()).filter(Boolean))] }) }}"
+      },
+      "id": "4290d328-6028-50e3-943f-4ff520b5de0d",
+      "name": "Catalog lookup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2080,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "Code catalog API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RULES_URL }}/documentation-requirements",
+        "options": {
+          "timeout": 30000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ payer: $('Pre-flight validations').item.json.policy?.payer_name ?? null, service_date: $('Pre-flight validations').item.json.visit.service_date, codes: [...new Set([...($('AI extraction adapter').item.json.diagnoses ?? []), ...($('AI extraction adapter').item.json.procedures ?? [])].map((x) => String(x.code ?? '').toUpperCase().trim()).filter(Boolean))] }) }}"
+      },
+      "id": "63d167bb-96e2-5a61-a0d6-86a005e0e8b7",
+      "name": "Payer / CMS rules",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2340,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "Rules API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Maps candidate codes, VERIFIES the cited evidence against the signed note, applies payer/CMS rules,\n// runs the completeness checklist and the complexity/value threshold, and assembles the draft claim.\nconst pre = $('Pre-flight validations').first().json;\nconst ex = $('AI extraction adapter').first().json;\nconst cat = $('Catalog lookup').first().json;\nconst rules = $('Payer / CMS rules').first().json;\nconst input = pre.input;\nconst visit = pre.visit;\nconst noteText = visit.note.text;\nconst runId = input.run_id;\nconst claimId = input.claim_id ?? ('C-' + String(visit.visit_id).replace(/^V-/, ''));\nconst now = new Date().toISOString();\n\nconst bad = (o) => !o || !!o.error;\nconst catalog = bad(cat) ? null : (cat.codes ?? {});\nconst reqs = bad(rules) ? null : (rules.requirements ?? {});\nconst checklist = bad(rules) ? [] : (rules.checklist ?? []);\nconst rulesetVersion = bad(rules) ? 'unavailable' : (rules.ruleset_version ?? 'unknown');\nconst RVU_THRESHOLD = Number($env.COMPLEXITY_RVU_THRESHOLD || 0);\nconst lower = noteText.toLowerCase();\n\n// sentence index (for snapping evidence to whole sentences)\nconst sentences = [];\n{ const re = /[^.!?]+[.!?]+|[^.!?]+$/g; let m;\n  while ((m = re.exec(noteText))) { const t = m[0].trim(); if (!t) continue; const lead = m[0].length - m[0].trimStart().length; sentences.push({ start: m.index + lead, end: m.index + lead + t.length }); } }\n\nfunction locate(quote) {\n  if (!quote || typeof quote !== 'string' || !quote.trim()) return null;\n  let idx = noteText.indexOf(quote), len = quote.length;\n  if (idx < 0) {\n    const pattern = quote.trim().split(/\\s+/).map((w) => w.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')).join('\\\\s+');\n    const m = new RegExp(pattern, 'i').exec(noteText);\n    if (!m) return null;\n    idx = m.index; len = m[0].length;\n  }\n  const end = idx + len;\n  const covered = sentences.filter((s) => s.start < end && s.end > idx);\n  if (!covered.length) return { start: idx, end };\n  return { start: Math.min(...covered.map((s) => s.start)), end: Math.max(...covered.map((s) => s.end)) };\n}\n\nconst isEM = (c) => /^992\\d\\d$/.test(c);\nconst missingChecklist = checklist.filter((item) => !(item.terms ?? []).some((t) => lower.includes(String(t).toLowerCase())));\nconst billed = pre.billing?.previous_claims ?? [];\n\nconst audit = [];\nconst A = (event, entity, o = {}) => audit.push({\n  ts: now, actor: o.actor ?? 'Coding Assistant', actor_type: o.actor_type ?? 'ai', event, entity,\n  claim_id: claimId, visit_id: visit.visit_id, patient_id: visit.patient.id, code: o.code ?? null,\n  previous_value: null, new_value: o.new_value ?? null, run_id: runId, version: null, metadata: o.metadata ?? {},\n});\n\nA('Signed note received', `Visit ${visit.visit_id}`, { actor: 'Workflow Engine', actor_type: 'system', metadata: { note_signed_at: String(visit.note.signed_at), mode: input.mode } });\nA('Note excerpt used by AI extraction', `Visit ${visit.visit_id}`, { metadata: { characters_sent: String(noteText.length), sent_to: 'extraction adapter' } });\n\nconst candidates = [\n  ...(ex.procedures ?? []).map((x) => ({ ...x, kind: 'procedure' })),\n  ...(ex.diagnoses ?? []).map((x) => ({ ...x, kind: 'diagnosis' })),\n];\nconst seen = new Set();\nconst codes = [];\n\ncandidates.forEach((c, i) => {\n  const code = String(c.code ?? '').toUpperCase().trim();\n  if (!code) return;\n  if (seen.has(code)) { A('Duplicate proposal suppressed', `Code ${code}`, { code, actor: 'Workflow Engine', actor_type: 'system', metadata: { reason: 'same code proposed more than once' } }); return; }\n  seen.add(code);\n\n  const entry = catalog ? catalog[code] : undefined;\n  const span = locate(c.evidence_quote);\n  const mk = (status, detail) => (detail ? { key: 'documentation_requirement', label: 'Documentation requirement', status, detail } : { key: 'documentation_requirement', label: 'Documentation requirement', status });\n\n  let doc;\n  if (!span) doc = mk('failed', 'The cited evidence does not appear in the signed note.');\n  else if (!catalog) doc = mk('unavailable', 'The code catalog did not respond, so the code could not be verified.');\n  else if (!entry) doc = mk('failed', `Code ${code} was not found in the code catalog.`);\n  else if (!reqs) doc = mk('unavailable', 'The payer/CMS rules service did not respond, so documentation requirements could not be verified.');\n  else {\n    const need = reqs[code]?.required_terms ?? [];\n    const missing = need.filter((t) => !lower.includes(String(t).toLowerCase()));\n    if (missing.length) doc = mk('failed', `Missing required documentation: ${missing.join(', ')}.`);\n    else if (isEM(code) && missingChecklist.length) doc = mk('warning', `Completeness checklist is missing: ${missingChecklist.map((m) => m.label).join(', ')}.`);\n    else doc = mk('passed');\n  }\n\n  const billable = { ...pre.gates.billable_event };\n  if (billable.status === 'passed') {\n    const dup = billed.find((b) => b.code === code && b.service_date === visit.service_date);\n    if (dup) { billable.status = 'warning'; billable.detail = `Code ${code} was already billed for this date of service (claim ${dup.claim_id ?? 'unknown'}).`; }\n    else if (pre.billing_unavailable) { billable.status = 'warning'; billable.detail = 'The duplicate-billing check was unavailable.'; }\n  }\n\n  const validation = [doc, { ...pre.gates.signed_note }, billable, { ...pre.gates.active_policy }];\n  const high = !!entry && (entry.complexity === 'high' || (RVU_THRESHOLD > 0 && Number(entry.rvu) >= RVU_THRESHOLD));\n  const confidence = Math.min(1, Math.max(0, Number(c.confidence) || 0));\n  const quarantined = validation.some((g) => g.status === 'failed');\n  const evidence = span\n    ? { excerpt: noteText.slice(span.start, span.end).trim(), start: span.start, end: span.end }\n    : { excerpt: String(c.evidence_quote ?? ''), start: 0, end: 0 };\n\n  codes.push({\n    id: `code_${runId}_${i}`, code,\n    category: entry?.category ?? (c.kind === 'diagnosis' ? 'ICD-10' : 'CPT'),\n    description: entry?.description ?? c.description ?? 'Description unavailable',\n    confidence, complexity: high ? 'high' : 'standard',\n    complexityReason: high\n      ? `High-complexity level: ${entry.complexity === 'high' ? 'this code is classified as high-complexity' : `its relative value (${entry.rvu}) meets the configured threshold (${RVU_THRESHOLD})`}. Additional documentation review is required; this does not mean the code is incorrect.`\n      : undefined,\n    evidence, validation, decision: 'pending', quarantined,\n  });\n\n  const meta = { model_confidence: `${Math.round(confidence * 100)}%`, category: entry?.category ?? 'unknown' };\n  A(c.kind === 'diagnosis' ? 'Diagnosis extracted' : 'Procedure extracted', `Code ${code}`, { code, metadata: meta });\n  A('Code proposed', `Code ${code}`, { code, metadata: { ...meta, complexity: high ? 'high' : 'standard' } });\n  A('Supporting evidence selected', `Code ${code}`, { code, metadata: { excerpt: `\"${evidence.excerpt}\"`, offset: span ? `${span.start}\u2013${span.end}` : 'not found in note', located_in_note: String(!!span) } });\n  A('Validation result recorded', `Code ${code}`, { code, actor: 'Workflow Engine', actor_type: 'system', metadata: Object.fromEntries(validation.map((g) => [g.key, g.status])) });\n  if (quarantined) A('Code quarantined \u2014 validation failed', `Code ${code}`, { code, actor: 'Workflow Engine', actor_type: 'system', metadata: { detail: doc.detail ?? validation.find((g) => g.status === 'failed')?.detail ?? '' } });\n});\n\nif (!codes.length) return [{ json: { ok: false, reason: 'no_codes_proposed', input } }];\n\nconst model = {\n  model_provider: ex.model?.provider ?? 'unknown', model_name: ex.model?.name ?? 'unknown', model_version: ex.model?.version ?? 'unknown',\n  workflow_version: $env.WORKFLOW_VERSION ?? 'unversioned', ruleset_version: rulesetVersion,\n};\nconst claim = {\n  id: claimId, visitId: visit.visit_id, patientName: visit.patient.name ?? visit.patient.id, patientId: visit.patient.id,\n  doctorId: visit.provider.id, doctorName: visit.provider.name ?? visit.provider.id,\n  payer: pre.policy?.payer_name ?? 'Unknown payer', facility: visit.facility ?? 'Unknown facility',\n  draftGeneratedAt: now, stage: 'doctor_review', status: 'pending_review', codes, noteText, noteSignedAt: visit.note.signed_at,\n  regeneration: { state: 'idle', count: 0 }, model, reviewAgeHours: 0, versions: [],\n};\nreturn [{ json: {\n  ok: true, mode: input.mode, run_id: runId, visit_id: visit.visit_id, claim,\n  draft: { runId, codes, model, generatedAt: now },\n  audit_rows: audit,\n  quarantined: codes.filter((c) => c.quarantined).map((c) => ({ code: c.code })),\n} }];"
+      },
+      "id": "b026da6f-a8ed-5ce3-98fb-dc24e9d925b2",
+      "name": "Build draft claim",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2600,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "bacb0e67-7abd-5e3a-8089-74a8bb032961",
+              "leftValue": "={{ $json.ok === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "cc1e7135-b532-5e30-aa8f-691982c91a9c",
+      "name": "Draft built?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2860,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH v AS (\n  SELECT COALESCE(MAX(version), 0) + 1 AS n FROM claim_drafts WHERE claim_id = $1\n), ins AS (\n  INSERT INTO claim_drafts (claim_id, visit_id, version, kind, run_id, payload)\n  SELECT $1, $2, n, 'draft', $3, $4::jsonb FROM v\n  RETURNING version\n), up AS (\n  INSERT INTO claims (claim_id, visit_id, doctor_id, patient_id, payer, note_signed_at, draft_generated_at, stage, status, latest_version)\n  SELECT $1, $2, $5, $6, $7, $8::timestamptz, now(), 'doctor_review', 'pending_review', n FROM v\n  ON CONFLICT (claim_id) DO UPDATE SET\n    stage = 'doctor_review', status = 'pending_review', draft_generated_at = now(),\n    latest_version = EXCLUDED.latest_version, stuck_notified_at = NULL,\n    regeneration_count = claims.regeneration_count + CASE WHEN $9 = 'regenerate' THEN 1 ELSE 0 END\n  RETURNING claim_id\n)\nSELECT (SELECT version FROM ins) AS version, (SELECT count(*) FROM up)::int AS claim_rows",
+        "options": {
+          "queryReplacement": "={{ [ $json.claim.id, $json.visit_id, $json.run_id, JSON.stringify($json.claim), $json.claim.doctorId, $json.claim.patientId, $json.claim.payer, $json.claim.noteSignedAt, $json.mode ] }}"
+        }
+      },
+      "id": "439fc1e2-56c9-525c-8f4a-aa26435bcdac",
+      "name": "Persist draft",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3120,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $('Build draft claim').first().json;\nconst version = Number($input.first().json.version);\nconst label = `Draft v${version}`;\nconst now = new Date().toISOString();\n\nr.audit_rows.forEach((a) => { a.version = label; });\nr.audit_rows.push({\n  ts: now, actor: 'Workflow Engine', actor_type: 'system', event: 'Draft claim created', entity: `Claim ${r.claim.id}`,\n  claim_id: r.claim.id, visit_id: r.visit_id, patient_id: r.claim.patientId, code: null, previous_value: null, new_value: label,\n  run_id: r.run_id, version: label,\n  metadata: { codes: r.claim.codes.map((c) => c.code).join(', '), quarantined: String(r.quarantined.length), mode: r.mode },\n});\n\nr.claim.versions = [{\n  label, number: version, kind: 'draft', createdAt: r.claim.draftGeneratedAt, createdBy: 'Coding Assistant', runId: r.run_id,\n  codes: r.claim.codes.map((c) => ({ code: c.code, category: c.category, description: c.description, decision: 'pending' })),\n}];\nr.version = version;\nr.version_label = label;\nr.notifications = r.quarantined.map((q) => ({\n  kind: 'quarantine', severity: 'warning', title: 'Code quarantined',\n  message: `Code ${q.code} has been quarantined because required documentation evidence could not be verified.`,\n  claim_id: r.claim.id, ref_id: q.code,\n}));\nreturn [{ json: r }];"
+      },
+      "id": "707f8e54-3a5c-51e5-9d9f-7ccbddc6d6f1",
+      "name": "Attach version",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3380,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ins AS (\n  INSERT INTO audit_events (ts, actor, actor_type, event, entity, claim_id, visit_id, patient_id, code, previous_value, new_value, run_id, version, metadata)\n  SELECT COALESCE(ts::timestamptz, now()), actor, actor_type, event, entity, claim_id, visit_id, patient_id, code, previous_value, new_value, run_id, version, COALESCE(metadata, '{}'::jsonb)\n  FROM jsonb_to_recordset($1::jsonb) AS x(ts text, actor text, actor_type text, event text, entity text, claim_id text, visit_id text, patient_id text, code text, previous_value text, new_value text, run_id text, version text, metadata jsonb)\n  RETURNING id\n)\nSELECT count(*)::int AS written FROM ins",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json.audit_rows)] }}"
+        }
+      },
+      "id": "94b745ad-03c0-56f9-962c-45f007c710fa",
+      "name": "Write audit",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3640,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ins AS (\n  INSERT INTO notifications (kind, severity, title, message, claim_id, ref_id)\n  SELECT kind, severity, title, message, claim_id, ref_id\n  FROM jsonb_to_recordset($1::jsonb) AS x(kind text, severity text, title text, message text, claim_id text, ref_id text)\n  RETURNING id, kind, severity, title, message, claim_id, created_at\n)\nSELECT COALESCE(jsonb_agg(to_jsonb(ins)), '[]'::jsonb) AS rows FROM ins",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($('Attach version').first().json.notifications)] }}"
+        }
+      },
+      "id": "b48e0c18-b2c4-5d07-9468-3e69e391eac2",
+      "name": "Write notifications",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3900,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const events = ($json.rows ?? []).map((r) => ({\n  type: 'notification.created',\n  notification: { id: `NTF-${r.id}`, kind: r.kind, severity: r.severity, title: r.title, message: r.message, claimId: r.claim_id ?? undefined, createdAt: r.created_at },\n}));\nreturn [{ json: { events } }];"
+      },
+      "id": "f8ca3f5f-73ff-5e6a-9297-61ade9eb1fb2",
+      "name": "Build notification events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4160,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVENT_RELAY_URL }}/events",
+        "options": {
+          "timeout": 8000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.EVENT_RELAY_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ events: $json.events }) }}"
+      },
+      "id": "579525a3-9dda-5698-932a-bb88ef4eeb5e",
+      "name": "Push events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4420,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: $('Attach version').first().json }];"
+      },
+      "id": "a9193d52-5fba-52b9-924c-8baa5ef5a43f",
+      "name": "Return result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4680,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Every early exit lands here so the caller always gets { ok:false, reason, detail, retryable } and the audit log records why.\nconst j = $json;\nconst input = $('Execute Workflow Trigger').first().json;\nlet reason, detail, retryable;\nif (j.gates) {\n  reason = 'preflight_failed';\n  const bad = Object.values(j.gates).filter((g) => g.status !== 'passed');\n  detail = bad.map((g) => `${g.label}: ${g.status}${g.detail ? ` (${g.detail})` : ''}`).join('; ');\n  retryable = bad.some((g) => g.status === 'unavailable');\n} else if (j.reason === 'no_codes_proposed') {\n  reason = 'no_codes_proposed';\n  detail = 'The extraction produced no codes that could be proposed for this note.';\n  retryable = false;\n} else {\n  reason = 'extraction_unavailable';\n  detail = j.error?.message ?? 'The extraction service returned no usable result.';\n  retryable = true;\n}\nreturn [{ json: {\n  ok: false, reason, detail, retryable, visit_id: input.visit_id, run_id: input.run_id, mode: input.mode,\n  audit_rows: [{ ts: new Date().toISOString(), actor: 'Workflow Engine', actor_type: 'system', event: 'Draft generation blocked', entity: `Visit ${input.visit_id}`,\n    claim_id: input.claim_id ?? null, visit_id: input.visit_id, patient_id: null, code: null, previous_value: null, new_value: null, run_id: input.run_id, version: null,\n    metadata: { reason, detail, retryable: String(retryable) } }],\n} }];"
+      },
+      "id": "cacb53ca-7a96-5b71-bea1-c4de5efd854f",
+      "name": "Failure result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        170
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ins AS (\n  INSERT INTO audit_events (ts, actor, actor_type, event, entity, claim_id, visit_id, patient_id, code, previous_value, new_value, run_id, version, metadata)\n  SELECT COALESCE(ts::timestamptz, now()), actor, actor_type, event, entity, claim_id, visit_id, patient_id, code, previous_value, new_value, run_id, version, COALESCE(metadata, '{}'::jsonb)\n  FROM jsonb_to_recordset($1::jsonb) AS x(ts text, actor text, actor_type text, event text, entity text, claim_id text, visit_id text, patient_id text, code text, previous_value text, new_value text, run_id text, version text, metadata jsonb)\n  RETURNING id\n)\nSELECT count(*)::int AS written FROM ins",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json.audit_rows)] }}"
+        }
+      },
+      "id": "506806e0-786a-5af7-84ed-b16ebd5b524f",
+      "name": "Audit failure",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1820,
+        170
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: $('Failure result').first().json }];"
+      },
+      "id": "d3e64449-30af-5f10-a271-615a5e6f91cf",
+      "name": "Return failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2080,
+        170
+      ]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch visit & note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch visit & note": {
+      "main": [
+        [
+          {
+            "node": "Fetch policy status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch policy status": {
+      "main": [
+        [
+          {
+            "node": "Fetch billing context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch billing context": {
+      "main": [
+        [
+          {
+            "node": "Pre-flight validations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pre-flight validations": {
+      "main": [
+        [
+          {
+            "node": "Pre-flight passed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pre-flight passed?": {
+      "main": [
+        [
+          {
+            "node": "AI extraction adapter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI extraction adapter": {
+      "main": [
+        [
+          {
+            "node": "Extraction usable?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraction usable?": {
+      "main": [
+        [
+          {
+            "node": "Catalog lookup",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Catalog lookup": {
+      "main": [
+        [
+          {
+            "node": "Payer / CMS rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Payer / CMS rules": {
+      "main": [
+        [
+          {
+            "node": "Build draft claim",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build draft claim": {
+      "main": [
+        [
+          {
+            "node": "Draft built?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft built?": {
+      "main": [
+        [
+          {
+            "node": "Persist draft",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist draft": {
+      "main": [
+        [
+          {
+            "node": "Attach version",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach version": {
+      "main": [
+        [
+          {
+            "node": "Write audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write audit": {
+      "main": [
+        [
+          {
+            "node": "Write notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write notifications": {
+      "main": [
+        [
+          {
+            "node": "Build notification events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build notification events": {
+      "main": [
+        [
+          {
+            "node": "Push events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Push events": {
+      "main": [
+        [
+          {
+            "node": "Return result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Failure result": {
+      "main": [
+        [
+          {
+            "node": "Audit failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Audit failure": {
+      "main": [
+        [
+          {
+            "node": "Return failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "id": "claimsDraftCore01"
+}

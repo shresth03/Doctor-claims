@@ -1,0 +1,858 @@
+{
+  "name": "Claims 02 \u00b7 Doctor callback \u2192 submit",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "claims/doctor-callback",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "http://localhost:5180"
+        }
+      },
+      "id": "8d111bd9-2802-5318-97c6-4b2530a54901",
+      "name": "Doctor callback",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "c9649fa7-93e6-51fe-898d-237f6942f462",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "Frontend webhook auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body ?? $input.first().json;\nconst errors = [];\nfor (const k of ['claimId', 'visitId', 'submittedBy', 'idempotencyKey']) if (!b[k] || typeof b[k] !== 'string') errors.push(`${k} is required`);\nif (!Number.isInteger(b.draftVersion)) errors.push('draftVersion must be an integer');\nif (!Array.isArray(b.decisions) || !b.decisions.length) errors.push('decisions must be a non-empty array');\nreturn [{ json: { valid: errors.length === 0, errors, body: b } }];"
+      },
+      "id": "d9cf1068-5514-5d97-90ee-75b5ccac7c90",
+      "name": "Validate payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "f4202fc6-3485-591a-93d2-989fbda440b5",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ad8bd214-c388-5636-b18b-01a3030a57cf",
+      "name": "Payload valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ code: 'bad_request', message: $json.errors.join('; '), details: $json.errors }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "3a47caec-7e5c-590c-9d77-e793bf443bcc",
+      "name": "Respond bad request",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        680
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT c.claim_id, c.visit_id, c.status, c.latest_version, c.note_signed_at, d.payload\nFROM claims c\nJOIN claim_drafts d ON d.claim_id = c.claim_id AND d.version = c.latest_version AND d.kind = 'draft'\nWHERE c.claim_id = $1",
+        "options": {
+          "queryReplacement": "={{ [ $json.body.claimId ] }}"
+        }
+      },
+      "id": "812872fe-f662-55f1-8d6d-62172384229c",
+      "name": "Load stored draft",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        780,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// The server never trusts the browser: every code in the STORED draft needs exactly one explicit decision.\nconst body = $('Validate payload').first().json.body;\nconst stored = $input.first().json;\nconst short = (httpStatus, code, message) => [{ json: { ok: false, short: true, httpStatus, code, message, details: [] } }];\nif (!stored.claim_id) return short(404, 'not_found', 'Claim not found.');\nif (body.draftVersion !== stored.latest_version) return short(409, 'stale_draft', 'This draft was regenerated. Reload the claim and review the new draft.');\n\nconst storedCodes = stored.payload.codes;\nconst byId = new Map(storedCodes.map((c) => [c.id, c]));\nconst seen = new Set();\nconst replaced = [];\nconst errors = [];\nfor (const d of body.decisions) {\n  const sc = byId.get(d.codeId);\n  if (!sc) { errors.push(`Unknown code id ${d.codeId}.`); continue; }\n  if (seen.has(d.codeId)) { errors.push(`More than one decision was sent for ${sc.code}.`); continue; }\n  seen.add(d.codeId);\n  if (d.decision !== 'approved' && d.decision !== 'rejected') { errors.push(`Code ${sc.code} has no explicit decision.`); continue; }\n  if (d.code !== sc.code) {\n    if (d.replacedFrom !== sc.code) errors.push(`Replacement for ${sc.code} must state replacedFrom.`);\n    replaced.push(String(d.code).toUpperCase());\n  } else if (d.decision === 'approved') {\n    const badGates = sc.validation.filter((g) => g.status === 'failed' || g.status === 'unavailable');\n    if (badGates.length) errors.push(`Code ${sc.code} cannot be approved: ${badGates.map((g) => `${g.label} ${g.status}`).join(', ')}.`);\n  }\n}\nfor (const sc of storedCodes) if (!seen.has(sc.id)) errors.push(`Code ${sc.code} has no decision.`);\nif (!body.decisions.some((d) => d.decision === 'approved')) errors.push('At least one approved code is required to submit a claim.');\nconst runId = `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;\nreturn [{ json: { ok: errors.length === 0, short: false, errors, replaced, body, stored, run_id: runId } }];"
+      },
+      "id": "2749524d-e430-5921-8d14-df110772a690",
+      "name": "Structural validation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CODE_CATALOG_URL }}/lookup",
+        "options": {
+          "timeout": 30000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ codes: $json.replaced ?? [] }) }}"
+      },
+      "id": "d477a4fe-7c6a-539b-bdbd-26611f0efbab",
+      "name": "Catalog re-check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "Code catalog API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const s = $('Structural validation').first().json;\nif (s.short) return [{ json: s }];\nconst cat = $input.first().json;\nconst errors = [...s.errors];\nconst decisions = s.body.decisions;\nconst claim = s.stored.payload;\nconst approvedReplaced = decisions.filter((d) => d.decision === 'approved' && d.replacedFrom);\nif (approvedReplaced.length) {\n  if (cat.error) errors.push('Replacement codes could not be verified: the code catalog did not respond.');\n  else for (const d of approvedReplaced) if (!cat.codes?.[String(d.code).toUpperCase()]) errors.push(`Replacement code ${d.code} was not found in the code catalog.`);\n}\nconst approved_codes = decisions.filter((d) => d.decision === 'approved').map((d) => {\n  const sc = claim.codes.find((c) => c.id === d.codeId);\n  const cc = d.replacedFrom ? cat.codes?.[String(d.code).toUpperCase()] : null;\n  return { code: d.code, category: cc?.category ?? sc.category, description: cc?.description ?? sc.description, replaced_from: d.replacedFrom ?? null };\n});\nreturn [{ json: {\n  ok: errors.length === 0, httpStatus: 422, code: 'validation_rejected',\n  message: errors.length ? `Final validation failed: ${errors[0]}` : '', details: errors,\n  body: s.body, stored: s.stored, run_id: s.run_id, approved_codes,\n} }];"
+      },
+      "id": "19b57a47-36c3-51f3-94c2-23056d194304",
+      "name": "Finalize validation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "88de4df5-48eb-5459-a5f8-bfe5cceefbf1",
+              "leftValue": "={{ $json.ok === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c188e790-0ee0-58ef-96c7-c888b16bf728",
+      "name": "Validation passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1820,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ code: $json.code, message: $json.message, details: $json.details }) }}",
+        "options": {
+          "responseCode": "={{ $json.httpStatus }}"
+        }
+      },
+      "id": "b17ad08b-af93-594b-8411-13dda62a1d39",
+      "name": "Respond rejected",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2080,
+        680
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO dedup_keys (key, meta) VALUES ($1, $2::jsonb) ON CONFLICT (key) DO NOTHING RETURNING key",
+        "options": {
+          "queryReplacement": "={{ [ $json.body.visitId + '+submitted', JSON.stringify({ source: 'doctor-callback', run_id: $json.run_id }) ] }}"
+        }
+      },
+      "id": "3435abdc-ee77-5de0-9fb8-8b16653a3679",
+      "name": "Dedup gate",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2080,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "6ed2de83-931c-5813-9d60-c5db03e1399d",
+              "leftValue": "={{ !!$json.key }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "35208edb-bd16-50e3-9e7b-1e115f98946c",
+      "name": "First submission?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2340,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT submitted_at, run_id, edi_control_number FROM submissions WHERE visit_id = $1",
+        "options": {
+          "queryReplacement": "={{ [ $('Finalize validation').first().json.body.visitId ] }}"
+        }
+      },
+      "id": "2110ad98-652e-56cb-874c-240dfdabcc21",
+      "name": "Load prior submission",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2600,
+        340
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "f5452a95-3b35-523e-96bd-0af5b67c1329",
+              "leftValue": "={{ !!$json.run_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "baf6e153-732b-5928-b46d-a2fc42e19ae6",
+      "name": "Prior submission found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2860,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH a AS (\n  INSERT INTO audit_events (actor, actor_type, event, entity, claim_id, visit_id, run_id, metadata)\n  VALUES ('Workflow Engine', 'system', 'Duplicate trigger suppressed', 'Claim ' || $1::text, $1::text, $2::text, $3::text,\n          jsonb_build_object('dedup_key', $2::text || '+submitted', 'suppressed_by', 'visit_id + claim_status'))\n  RETURNING id\n) SELECT count(*)::int AS written FROM a",
+        "options": {
+          "queryReplacement": "={{ [ $('Finalize validation').first().json.body.claimId, $('Finalize validation').first().json.body.visitId, $('Finalize validation').first().json.run_id ] }}"
+        }
+      },
+      "id": "bb1f1d80-d0e5-5a23-93f6-396c0223cb4b",
+      "name": "Audit duplicate submit",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3120,
+        340
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVENT_RELAY_URL }}/events",
+        "options": {
+          "timeout": 8000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.EVENT_RELAY_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ events: [{ type: 'dedup.suppressed', key: 'visit_id + claim_status', entity: 'Claim ' + $('Finalize validation').first().json.body.claimId, claimId: $('Finalize validation').first().json.body.claimId }] }) }}"
+      },
+      "id": "71aef76e-fd00-54a6-b8b3-02a67cf86b77",
+      "name": "Push dedup event",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3380,
+        340
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ submittedAt: $('Load prior submission').first().json.submitted_at, runId: $('Load prior submission').first().json.run_id, ediControlNumber: $('Load prior submission').first().json.edi_control_number }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "8c7f69dc-d6c5-5dc4-bf61-e2bf0524efc5",
+      "name": "Respond prior submission",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3640,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ code: 'submission_in_progress', message: 'This claim is already being submitted. Try again in a moment.' }) }}",
+        "options": {
+          "responseCode": 409
+        }
+      },
+      "id": "931fc267-c453-5979-ad89-2f2978b676b9",
+      "name": "Respond in progress",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3120,
+        510
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const v = $('Finalize validation').first().json;\nconst claim = v.stored.payload;\nreturn [{ json: {\n  claim_id: claim.id, visit_id: claim.visitId,\n  patient: { id: claim.patientId, name: claim.patientName },\n  provider: { id: claim.doctorId, name: claim.doctorName },\n  payer: claim.payer, facility: claim.facility, note_signed_at: claim.noteSignedAt,\n  submitted_by: v.body.submittedBy, idempotency_key: `submit_${claim.visitId}`,\n  codes: v.approved_codes,\n} }];"
+      },
+      "id": "23db0a2d-a810-54d6-815e-3a50e43bc032",
+      "name": "Build submission payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2600,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EDI_SUBMIT_URL }}",
+        "options": {
+          "timeout": 60000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "a7c16c41-d21d-5287-9cc0-90b95e3c3132",
+      "name": "Submit to clearinghouse",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "EDI clearinghouse API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "8ecaf4f8-114c-5b66-af22-5c9b42ed59cf",
+              "leftValue": "={{ !$json.error && !!$json.control_number }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f9fd6070-b23d-5098-80a1-7e9ccc4833ee",
+      "name": "Submission accepted?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3120,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH d AS (\n  DELETE FROM dedup_keys WHERE key = $1 RETURNING key\n), a AS (\n  INSERT INTO audit_events (actor, actor_type, event, entity, claim_id, visit_id, patient_id, run_id, version, metadata)\n  VALUES ('Workflow Engine', 'system', 'Submission failed', 'Claim ' || $2::text, $2::text, $3::text, $4::text, $5::text, $6::text, jsonb_build_object('error', $7::text))\n  RETURNING id\n) SELECT count(*)::int AS released FROM d",
+        "options": {
+          "queryReplacement": "={{ [ $('Finalize validation').first().json.body.visitId + '+submitted', $('Finalize validation').first().json.body.claimId, $('Finalize validation').first().json.body.visitId, $('Finalize validation').first().json.stored.payload.patientId, $('Finalize validation').first().json.run_id, 'Draft v' + $('Finalize validation').first().json.stored.latest_version, $('Submit to clearinghouse').first().json.error?.message ?? 'The clearinghouse returned no control number.' ] }}"
+        }
+      },
+      "id": "6a325c66-69ed-52ec-8253-599a7d284216",
+      "name": "Release dedup + audit failure",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3380,
+        170
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ code: 'edi_rejected', message: 'The EDI clearinghouse rejected the submission (' + ($('Submit to clearinghouse').first().json.error?.message ?? 'no control number returned') + '). The claim was not modified and can be resubmitted.' }) }}",
+        "options": {
+          "responseCode": 502
+        }
+      },
+      "id": "e98895ab-63c9-5156-8973-01569ac6895f",
+      "name": "Respond submission failed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3640,
+        170
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const v = $('Finalize validation').first().json;\nconst sub = $('Submit to clearinghouse').first().json;\nconst claim = v.stored.payload;\nconst body = v.body;\nconst now = new Date().toISOString();\nconst draftLabel = `Draft v${v.stored.latest_version}`;\nconst rows = [];\nconst A = (event, entity, o = {}) => rows.push({\n  ts: now, actor: o.actor ?? body.submittedBy, actor_type: o.actor_type ?? 'doctor', event, entity,\n  claim_id: claim.id, visit_id: claim.visitId, patient_id: claim.patientId, code: o.code ?? null,\n  previous_value: o.previous ?? null, new_value: o.next ?? null, run_id: v.run_id,\n  version: o.version === undefined ? draftLabel : o.version, metadata: o.metadata ?? {},\n});\nfor (const d of body.decisions) {\n  const sc = claim.codes.find((c) => c.id === d.codeId);\n  if (d.replacedFrom) A('Doctor edited code', `Code ${d.code}`, { code: d.code, previous: d.replacedFrom, next: d.code, metadata: { ai_proposed: sc?.code ?? d.replacedFrom, decision_after_edit: d.decision } });\n  A(d.decision === 'approved' ? 'Doctor approved code' : 'Doctor rejected code', `Code ${d.code}`, {\n    code: d.code, previous: 'pending', next: d.decision,\n    metadata: { decision_scope: 'single code', ...(d.reason ? { reason: d.reason } : {}), ...(d.note ? { note: d.note } : {}), ...(sc?.complexity === 'high' ? { high_complexity_review: 'explicit decision recorded' } : {}) },\n  });\n}\nconst approved = body.decisions.filter((d) => d.decision === 'approved');\nA('Final claim version submitted', `Claim ${claim.id}`, {\n  actor: 'Workflow Engine', actor_type: 'system', version: null,\n  metadata: { edi_control_number: String(sub.control_number), approved_codes: v.approved_codes.map((c) => c.code).join(', '), approved: String(approved.length), rejected: String(body.decisions.length - approved.length) },\n});\nconst changed = body.decisions.filter((d) => d.decision === 'rejected' || d.replacedFrom).length;\nreturn [{ json: {\n  claim_id: claim.id, visit_id: claim.visitId, run_id: v.run_id, edi_control_number: String(sub.control_number),\n  submitted_at: now, submitted_by: body.submittedBy,\n  submitted_payload: { claim_id: claim.id, approved_codes: v.approved_codes, decisions: body.decisions, from_draft: v.stored.latest_version },\n  audit_rows: rows, proposed_count: body.decisions.length, changed_count: changed,\n} }];"
+      },
+      "id": "c6abd5b5-1c81-5a9e-8b53-04a82e38ac0c",
+      "name": "Build audit & metrics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3380,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH v AS (\n  SELECT COALESCE(MAX(version), 0) + 1 AS n FROM claim_drafts WHERE claim_id = $1\n), sv AS (\n  INSERT INTO claim_drafts (claim_id, visit_id, version, kind, run_id, payload)\n  SELECT $1, $2, n, 'submitted', $3, $6::jsonb FROM v RETURNING version\n), sub AS (\n  INSERT INTO submissions (visit_id, claim_id, run_id, edi_control_number, submitted_at, submitted_by, payload)\n  VALUES ($2, $1, $3, $4, $5::timestamptz, $7, $6::jsonb) RETURNING visit_id\n), cl AS (\n  UPDATE claims SET stage = 'submitted', status = 'submitted', submitted_at = $5::timestamptz WHERE claim_id = $1 RETURNING claim_id\n), m AS (\n  INSERT INTO claim_metrics (claim_id, visit_id, doctor_id, note_signed_at, submitted_at, proposed_count, changed_count)\n  SELECT $1, $2, c.doctor_id, c.note_signed_at, $5::timestamptz, $9::int, $10::int FROM claims c WHERE c.claim_id = $1\n  RETURNING claim_id\n), au AS (\n  INSERT INTO audit_events (ts, actor, actor_type, event, entity, claim_id, visit_id, patient_id, code, previous_value, new_value, run_id, version, metadata)\n  SELECT COALESCE(ts::timestamptz, now()), actor, actor_type, event, entity, claim_id, visit_id, patient_id, code, previous_value, new_value, run_id,\n         COALESCE(version, 'Submitted v' || (SELECT version FROM sv)), COALESCE(metadata, '{}'::jsonb)\n  FROM jsonb_to_recordset($8::jsonb) AS x(ts text, actor text, actor_type text, event text, entity text, claim_id text, visit_id text, patient_id text, code text, previous_value text, new_value text, run_id text, version text, metadata jsonb)\n  RETURNING id\n)\nSELECT (SELECT version FROM sv) AS version, (SELECT count(*) FROM au)::int AS audit_written, (SELECT count(*) FROM sub)::int AS submission_rows",
+        "options": {
+          "queryReplacement": "={{ [ $json.claim_id, $json.visit_id, $json.run_id, $json.edi_control_number, $json.submitted_at, JSON.stringify($json.submitted_payload), $json.submitted_by, JSON.stringify($json.audit_rows), $json.proposed_count, $json.changed_count ] }}"
+        }
+      },
+      "id": "9e21ec95-be16-53aa-bd80-a61bdcf95f53",
+      "name": "Persist submission",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3640,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ submittedAt: $('Build audit & metrics').first().json.submitted_at, runId: $('Build audit & metrics').first().json.run_id, ediControlNumber: $('Build audit & metrics').first().json.edi_control_number }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "3f598ca0-9de9-5994-8832-0a64b1253178",
+      "name": "Respond submitted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3900,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Doctor callback": {
+      "main": [
+        [
+          {
+            "node": "Validate payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate payload": {
+      "main": [
+        [
+          {
+            "node": "Payload valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Payload valid?": {
+      "main": [
+        [
+          {
+            "node": "Load stored draft",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond bad request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load stored draft": {
+      "main": [
+        [
+          {
+            "node": "Structural validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structural validation": {
+      "main": [
+        [
+          {
+            "node": "Catalog re-check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Catalog re-check": {
+      "main": [
+        [
+          {
+            "node": "Finalize validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalize validation": {
+      "main": [
+        [
+          {
+            "node": "Validation passed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validation passed?": {
+      "main": [
+        [
+          {
+            "node": "Dedup gate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedup gate": {
+      "main": [
+        [
+          {
+            "node": "First submission?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "First submission?": {
+      "main": [
+        [
+          {
+            "node": "Build submission payload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Load prior submission",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load prior submission": {
+      "main": [
+        [
+          {
+            "node": "Prior submission found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prior submission found?": {
+      "main": [
+        [
+          {
+            "node": "Audit duplicate submit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond in progress",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Audit duplicate submit": {
+      "main": [
+        [
+          {
+            "node": "Push dedup event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Push dedup event": {
+      "main": [
+        [
+          {
+            "node": "Respond prior submission",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build submission payload": {
+      "main": [
+        [
+          {
+            "node": "Submit to clearinghouse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submit to clearinghouse": {
+      "main": [
+        [
+          {
+            "node": "Submission accepted?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submission accepted?": {
+      "main": [
+        [
+          {
+            "node": "Build audit & metrics",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Release dedup + audit failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release dedup + audit failure": {
+      "main": [
+        [
+          {
+            "node": "Respond submission failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build audit & metrics": {
+      "main": [
+        [
+          {
+            "node": "Persist submission",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist submission": {
+      "main": [
+        [
+          {
+            "node": "Respond submitted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

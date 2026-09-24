@@ -1,0 +1,560 @@
+{
+  "name": "Claims 01 \u00b7 Visit note signed",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "claims/visit-note-signed",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "056db0a3-a201-55b0-86a4-8ace29fef5e9",
+      "name": "Visit note signed",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "3f2cb990-2563-569b-8b5b-133a98f6e69b",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "Inbound system webhook auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body ?? $input.first().json;\nconst visitId = String(b.visit_id ?? '').trim();\nif (!visitId) throw new Error('visit_id is required');\nreturn [{ json: {\n  visit_id: visitId, mode: 'new',\n  run_id: `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,\n  dedup_key: `${visitId}+draft_generated`,\n} }];"
+      },
+      "id": "938408c9-7251-558b-acfa-825d5585daa7",
+      "name": "Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO dedup_keys (key, meta) VALUES ($1, $2::jsonb) ON CONFLICT (key) DO NOTHING RETURNING key",
+        "options": {
+          "queryReplacement": "={{ [ $json.dedup_key, JSON.stringify({ source: 'visit-note-signed', run_id: $json.run_id }) ] }}"
+        }
+      },
+      "id": "97513c94-1fc0-519d-a668-11e90ecda5ca",
+      "name": "Dedup gate",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "1d8c673f-387d-559f-8945-59a530d01764",
+              "leftValue": "={{ !!$json.key }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "0d58526f-dfd0-56f3-acc0-9303d6ff9b4f",
+      "name": "First delivery?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'duplicate_suppressed' }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "b11ea4ce-68bb-55fb-accc-d0645ef2d726",
+      "name": "Respond duplicate",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1040,
+        170
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH a AS (\n  INSERT INTO audit_events (actor, actor_type, event, entity, visit_id, run_id, metadata)\n  VALUES ('Workflow Engine', 'system', 'Duplicate trigger suppressed', 'Visit ' || $1::text, $1::text, $2::text,\n          jsonb_build_object('dedup_key', $3::text, 'suppressed_by', 'visit_id + claim_status'))\n  RETURNING id\n) SELECT count(*)::int AS written FROM a",
+        "options": {
+          "queryReplacement": "={{ [ $('Normalize').first().json.visit_id, $('Normalize').first().json.run_id, $('Normalize').first().json.dedup_key ] }}"
+        }
+      },
+      "id": "539b24ce-b1e9-56dc-8ac3-789a58772d83",
+      "name": "Audit duplicate",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1300,
+        170
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVENT_RELAY_URL }}/events",
+        "options": {
+          "timeout": 8000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.EVENT_RELAY_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ events: [{ type: 'dedup.suppressed', key: 'visit_id + claim_status', entity: 'Visit ' + $('Normalize').first().json.visit_id }] }) }}"
+      },
+      "id": "bf58741f-0c18-554f-9b09-14b5538082fb",
+      "name": "Push dedup event",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        170
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'accepted', runId: $('Normalize').first().json.run_id }) }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "69c9be89-e2cc-5fc1-bc2b-5fc27df6509b",
+      "name": "Respond accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const n = $('Normalize').first().json;\nreturn [{ json: { visit_id: n.visit_id, mode: 'new', run_id: n.run_id } }];"
+      },
+      "id": "6fd03474-74f1-53c5-96e3-07f0ff43a7c0",
+      "name": "Prepare core input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": "claimsDraftCore01",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "ec0c038a-9430-5b0d-a7b1-227721c11d3d",
+      "name": "Run draft core",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        1560,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "9c3a3008-0a5b-5dfe-9069-c33d62bfc54c",
+              "leftValue": "={{ $json.ok === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f1d1604d-f517-503a-ba69-5cd43cbe503b",
+      "name": "Draft ok?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1820,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { events: [{ type: 'draft.created', claim: $json.claim }] } }];"
+      },
+      "id": "5fd55116-6535-514c-8b7d-dc7f9b1221f4",
+      "name": "Build draft.created event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2080,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVENT_RELAY_URL }}/events",
+        "options": {
+          "timeout": 8000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.EVENT_RELAY_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ events: $json.events }) }}"
+      },
+      "id": "98e4bfad-e3fe-58f5-b0e3-56cecf45dbfa",
+      "name": "Push draft to UI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2340,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $json;\nconst n = $('Normalize').first().json;\nconst detail = j.detail ?? j.error?.message ?? 'The draft workflow failed unexpectedly.';\nreturn [{ json: { notifications: [{\n  kind: 'system', severity: 'warning', title: 'Draft could not be generated',\n  message: `Visit ${n.visit_id}: ${detail}`, claim_id: null, ref_id: n.visit_id,\n}] } }];"
+      },
+      "id": "99500254-1c3d-578d-9992-26de1552b7ce",
+      "name": "Failure notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2080,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ins AS (\n  INSERT INTO notifications (kind, severity, title, message, claim_id, ref_id)\n  SELECT kind, severity, title, message, claim_id, ref_id\n  FROM jsonb_to_recordset($1::jsonb) AS x(kind text, severity text, title text, message text, claim_id text, ref_id text)\n  RETURNING id, kind, severity, title, message, claim_id, created_at\n)\nSELECT COALESCE(jsonb_agg(to_jsonb(ins)), '[]'::jsonb) AS rows FROM ins",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json.notifications)] }}"
+        }
+      },
+      "id": "96517817-f744-5884-9282-ba71e41a7114",
+      "name": "Write failure notification",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2340,
+        340
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const events = ($json.rows ?? []).map((r) => ({\n  type: 'notification.created',\n  notification: { id: `NTF-${r.id}`, kind: r.kind, severity: r.severity, title: r.title, message: r.message, claimId: r.claim_id ?? undefined, createdAt: r.created_at },\n}));\nreturn [{ json: { events } }];"
+      },
+      "id": "03c74c55-99c7-5fca-8167-d8fcf3a6c1e8",
+      "name": "Build failure events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2600,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVENT_RELAY_URL }}/events",
+        "options": {
+          "timeout": 8000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.EVENT_RELAY_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ events: $json.events }) }}"
+      },
+      "id": "d33d37b2-5acf-583a-a700-959e60da74fa",
+      "name": "Push failure event",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        340
+      ],
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Visit note signed": {
+      "main": [
+        [
+          {
+            "node": "Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize": {
+      "main": [
+        [
+          {
+            "node": "Dedup gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedup gate": {
+      "main": [
+        [
+          {
+            "node": "First delivery?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "First delivery?": {
+      "main": [
+        [
+          {
+            "node": "Respond accepted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond duplicate": {
+      "main": [
+        [
+          {
+            "node": "Audit duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Audit duplicate": {
+      "main": [
+        [
+          {
+            "node": "Push dedup event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond accepted": {
+      "main": [
+        [
+          {
+            "node": "Prepare core input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare core input": {
+      "main": [
+        [
+          {
+            "node": "Run draft core",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run draft core": {
+      "main": [
+        [
+          {
+            "node": "Draft ok?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft ok?": {
+      "main": [
+        [
+          {
+            "node": "Build draft.created event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build draft.created event": {
+      "main": [
+        [
+          {
+            "node": "Push draft to UI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Failure notification": {
+      "main": [
+        [
+          {
+            "node": "Write failure notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write failure notification": {
+      "main": [
+        [
+          {
+            "node": "Build failure events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build failure events": {
+      "main": [
+        [
+          {
+            "node": "Push failure event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

@@ -1,0 +1,272 @@
+{
+  "name": "Claims 05 \u00b7 Stuck draft reminder (cron)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/30 * * * *"
+            }
+          ]
+        }
+      },
+      "id": "39849f29-f658-5c47-94f4-be20f2936b02",
+      "name": "Every 30 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE claims SET stuck_notified_at = now()\nWHERE status IN ('pending_review', 'partially_reviewed')\n  AND draft_generated_at < now() - interval '24 hours'\n  AND (stuck_notified_at IS NULL OR stuck_notified_at < draft_generated_at)\nRETURNING claim_id, doctor_id, EXTRACT(EPOCH FROM (now() - draft_generated_at)) / 3600 AS age_hours",
+        "options": {
+          "queryReplacement": "={{ [] }}"
+        }
+      },
+      "id": "326609b4-5239-5d21-93ea-b257aa408853",
+      "name": "Find stuck claims",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "1d46db60-d976-5ba9-849d-507d9ba29df8",
+              "leftValue": "={{ ($input.all() ?? []).length > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "fe764fb3-c448-5abb-b73b-68395c4dfb72",
+      "name": "Any found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map((i) => i.json);\nconst now = new Date().toISOString();\nreturn [{ json: {\n  notifications: rows.map((r) => ({\n    kind: 'stuck_draft', severity: 'warning', title: 'Claim awaiting doctor review',\n    message: `Claim ${r.claim_id} has been awaiting doctor review for ${Math.round(r.age_hours)} hours.`,\n    claim_id: r.claim_id, ref_id: r.doctor_id,\n  })),\n  audit_rows: rows.map((r) => ({\n    ts: now, actor: 'Workflow Engine', actor_type: 'system', event: 'Stuck draft reminder sent',\n    entity: `Claim ${r.claim_id}`, claim_id: r.claim_id, visit_id: null, patient_id: null, code: null,\n    previous_value: null, new_value: null, run_id: 'cron_stuck_draft', version: null,\n    metadata: { review_age_hours: String(Math.round(r.age_hours)) },\n  })),\n} }];"
+      },
+      "id": "014f1a1a-fca8-5ae2-8d38-a68bbee07efa",
+      "name": "Build notifications",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ins AS (\n  INSERT INTO notifications (kind, severity, title, message, claim_id, ref_id)\n  SELECT kind, severity, title, message, claim_id, ref_id\n  FROM jsonb_to_recordset($1::jsonb) AS x(kind text, severity text, title text, message text, claim_id text, ref_id text)\n  RETURNING id, kind, severity, title, message, claim_id, created_at\n)\nSELECT COALESCE(jsonb_agg(to_jsonb(ins)), '[]'::jsonb) AS rows FROM ins",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json.notifications)] }}"
+        }
+      },
+      "id": "87db138f-b448-5149-87b7-62fece89641d",
+      "name": "Write notifications",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1040,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ins AS (\n  INSERT INTO audit_events (ts, actor, actor_type, event, entity, claim_id, visit_id, patient_id, code, previous_value, new_value, run_id, version, metadata)\n  SELECT COALESCE(ts::timestamptz, now()), actor, actor_type, event, entity, claim_id, visit_id, patient_id, code, previous_value, new_value, run_id, version, COALESCE(metadata, '{}'::jsonb)\n  FROM jsonb_to_recordset($1::jsonb) AS x(ts text, actor text, actor_type text, event text, entity text, claim_id text, visit_id text, patient_id text, code text, previous_value text, new_value text, run_id text, version text, metadata jsonb)\n  RETURNING id\n)\nSELECT count(*)::int AS written FROM ins",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($('Build notifications').first().json.audit_rows)] }}"
+        }
+      },
+      "id": "36a08076-6ee5-58d1-82b0-4aa2b4e50a9b",
+      "name": "Write audit",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1300,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { events: ($json.rows ?? []).map((r) => ({ type: 'notification.created', notification: { id: `NTF-${r.id}`, kind: r.kind, severity: r.severity, title: r.title, message: r.message, claimId: r.claim_id ?? undefined, createdAt: r.created_at } })) } }];"
+      },
+      "id": "618a7e82-4b41-5ecc-891a-64a5581bf261",
+      "name": "Build events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVENT_RELAY_URL }}/events",
+        "options": {
+          "timeout": 8000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.EVENT_RELAY_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ events: $json.events }) }}"
+      },
+      "id": "face8ab7-04e8-528a-b064-a645456d1c73",
+      "name": "Push events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1820,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Every 30 minutes": {
+      "main": [
+        [
+          {
+            "node": "Find stuck claims",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find stuck claims": {
+      "main": [
+        [
+          {
+            "node": "Any found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any found?": {
+      "main": [
+        [
+          {
+            "node": "Build notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build notifications": {
+      "main": [
+        [
+          {
+            "node": "Write notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write notifications": {
+      "main": [
+        [
+          {
+            "node": "Write audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write audit": {
+      "main": [
+        [
+          {
+            "node": "Build events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build events": {
+      "main": [
+        [
+          {
+            "node": "Push events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

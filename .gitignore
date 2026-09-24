@@ -1,0 +1,34 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Env files — never commit real credentials/URLs
+.env
+.env.*
+!.env.example
+!n8n/.env.example
+
+# Local/disposable n8n runtime data (sqlite db, cache, encryption key config) — never commit
+n8n/.n8n-local/
+n8n/*.sqlite*

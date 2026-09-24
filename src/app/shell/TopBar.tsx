@@ -33,7 +33,12 @@ export function TopBar() {
     : [];
 
   return (
-    <header className="flex h-16 items-center gap-4 border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)]/60 px-6 backdrop-blur-xl">
+    // relative + an explicit z-index (not just z-50 on the dropdowns) is required here: backdrop-blur gives this
+    // header its own stacking context, and every routed page is wrapped in a motion.div that animates `y`
+    // (PageTransition), which leaves a `transform` behind and creates one too. Two stacking contexts at the same
+    // implicit level fall back to DOM order, and <main> comes after <header> — so without an explicit z-index the
+    // header (and everything inside it, including its z-50 dropdowns) loses to whatever the current page renders.
+    <header className="relative z-30 flex h-16 items-center gap-4 border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)]/60 px-6 backdrop-blur-xl">
       <div className="relative w-full max-w-md">
         <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
         <input

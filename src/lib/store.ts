@@ -146,11 +146,11 @@ export const useAppStore = create<AppState>()(
         hydrated: false,
         hydrating: false,
         hydrationError: null,
-hydrate: async () => {
+        hydrate: async () => {
           if (get().hydrating || get().hydrated) return;
           set({ hydrating: true, hydrationError: null });
           try {
-            const [fetchedClaims, docRequests, complianceQueue, escalations, kpi, fetchedAudit, notifications] = await Promise.all([
+            const [fetchedClaims, fetchedDocRequests, complianceQueue, escalations, kpi, fetchedAudit, fetchedNotifications] = await Promise.all([
               readApi.listClaims(),
               readApi.listDocRequests(),
               readApi.listComplianceQueue(),
@@ -160,30 +160,42 @@ hydrate: async () => {
               readApi.listNotifications(),
             ]);
 
-            // PRESERVE LOCAL WORK: Merge backend claims with local persisted claims
-            const localClaims = get().claims;
+            const state = get();
+
+            // 1. Safely merge Claims: Keep local state if the user has interacted with it
             const mergedClaims = fetchedClaims.map((fc) => {
-              const lc = localClaims.find((c) => c.id === fc.id);
-              // If the user has local unsubmitted decisions on this claim, keep the local version
-              if (lc && (lc.status === "partially_reviewed" || lc.status === "approved" || lc.status === "needs_correction") && lc.stage !== "submitted") {
+              const lc = state.claims.find((c) => c.id === fc.id);
+              // Protect local work: if it was submitted, edited, partially reviewed, or regenerated
+              if (lc && (lc.stage === "submitted" || lc.stage === "submission" || lc.status !== "pending_review" || lc.versions.length > fc.versions.length)) {
                 return lc;
               }
               return fc;
             });
 
-            // PRESERVE LOCAL AUDIT: Combine backend audit log with local client-generated events
-            const localAudit = get().auditTrail;
-            const auditMap = new Map([...fetchedAudit, ...localAudit].map(a => [a.id, a]));
+            // 2. Safely merge Doc Requests: Keep local state if the user has attached/submitted responses
+            const mergedDocRequests = fetchedDocRequests.map((fr) => {
+              const lr = state.docRequests.find((r) => r.id === fr.id);
+              if (lr && (lr.status === "submitted" || lr.status === "ready_to_send" || lr.responseHistory.length > 0)) {
+                return lr;
+              }
+              return fr;
+            });
+
+            // 3. Merge Audit and Notifications (combine local actions + fetched defaults)
+            const auditMap = new Map([...fetchedAudit, ...state.auditTrail].map(a => [a.id, a]));
             const mergedAudit = Array.from(auditMap.values()).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+            
+            const notifMap = new Map([...fetchedNotifications, ...state.notifications].map(n => [n.id, n]));
+            const mergedNotif = Array.from(notifMap.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
             set({ 
               claims: mergedClaims, 
-              docRequests, 
+              docRequests: mergedDocRequests, 
               complianceQueue, 
               escalations, 
               kpi, 
               auditTrail: mergedAudit, 
-              notifications, 
+              notifications: mergedNotif, 
               hydrated: true, 
               hydrating: false 
             });
@@ -191,6 +203,7 @@ hydrate: async () => {
             set({ hydrating: false, hydrationError: e instanceof ApiError ? e.message : "Could not load claims data." });
           }
         },
+
         selectedClaimId: null,
         selectClaim: (id) => set({ selectedClaimId: id }),
 
@@ -198,7 +211,6 @@ hydrate: async () => {
           const claim = get().claims.find((c) => c.id === claimId);
           const target = claim?.codes.find((c) => c.id === codeId);
           if (!claim || !target || isClaimLocked(claim) || isRegenerationBusy(claim)) return;
-          // Approval is refused for quarantined / unvalidated codes — enforced here, not just in the UI.
           if (decision === "approved" && approvalBlocker(target)) return;
 
           patchClaim(claimId, (c) => {
@@ -238,7 +250,6 @@ hydrate: async () => {
           if (!claim || !target || !newCode || newCode === target.code || isClaimLocked(claim) || isRegenerationBusy(claim)) return;
 
           const previous = target.code;
-          // The replacement must be explicitly re-decided and re-validated: reset the decision and mark validation incomplete.
           patchClaim(claimId, (c) => ({
             ...c,
             status: "partially_reviewed",
@@ -275,7 +286,6 @@ hydrate: async () => {
           try {
             const result = await api.validateCode({ claimId, visitId: claim.visitId, code: newCode });
             const quarantined = result.validation.some((v) => v.status === "failed");
-            // If the draft was regenerated meanwhile, the code row no longer exists and this is a no-op.
             patchClaim(claimId, (c) => ({
               ...c,
               codes: c.codes.map((code) =>
@@ -305,7 +315,6 @@ hydrate: async () => {
               });
             }
           } catch (e) {
-            // Validation service unreachable: leave the gates "unavailable" so the code stays unapprovable. Never fake a pass.
             patchClaim(claimId, (c) => ({
               ...c,
               codes: c.codes.map((code) =>
@@ -324,7 +333,6 @@ hydrate: async () => {
         regenerateClaim: async (claimId) => {
           const claim = get().claims.find((c) => c.id === claimId);
           if (!claim) return;
-          // Client-side guard so repeated clicks never emit a second request; the backend lock is the source of truth.
           if (isRegenerationBusy(claim)) throw new ConflictError("regeneration_locked", "Regeneration is already in progress.");
 
           const previousState = claim.regeneration.state;
@@ -347,7 +355,6 @@ hydrate: async () => {
               }),
             );
           } catch (e) {
-            // A 409 means someone else holds the lock: restore our previous state and surface the backend message.
             patchClaim(claimId, (c) => ({ ...c, regeneration: { ...c.regeneration, state: e instanceof ConflictError ? previousState : "failed" } }));
             throw e;
           }
@@ -462,8 +469,6 @@ hydrate: async () => {
     {
       name: "meridian-claims-storage",
       partialize: (state) => ({
-        // We persist data locally to guard against immediate reloads losing pending work, 
-        // but hydrate() will silently override this with live data from the DB if configured
         claims: state.claims,
         auditTrail: state.auditTrail,
         notifications: state.notifications,
@@ -506,7 +511,7 @@ function handleBackendEvent(event: BackendEvent) {
         runId: event.draft.runId,
         codes: snapshotCodes(event.draft.codes),
       };
-      // Earlier versions are preserved untouched; the new draft simply becomes the current one and must be reviewed again.
+      
       patch(event.claimId, (c) => ({
         ...c,
         codes: event.draft.codes,
@@ -577,8 +582,6 @@ function handleBackendEvent(event: BackendEvent) {
           latencyMedianHours: k.latencyMedianHours,
           latencyP90Hours: k.latencyP90Hours,
           latencyHistory: appendKpiPoint(s.kpi.latencyHistory, k.generatedAt, k.latencyMedianHours),
-          // A null denial rate means "no remittance feed yet" (see the KPI-refresh workflow), never "zero" —
-          // keep whatever the UI already had rather than overwrite it with missing data.
           denialRateCurrent: k.denialRateCurrent ?? s.kpi.denialRateCurrent,
           denialRateBaseline: k.denialRateBaseline ?? s.kpi.denialRateBaseline,
           denialRateHistory:
@@ -602,5 +605,6 @@ configureMock({
     return c ? { noteText: c.noteText, codeCount: c.codes.length } : null;
   },
 });
+
 api.subscribe(handleBackendEvent);
 void useAppStore.getState().hydrate();

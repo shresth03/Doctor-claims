@@ -146,11 +146,11 @@ export const useAppStore = create<AppState>()(
         hydrated: false,
         hydrating: false,
         hydrationError: null,
-        hydrate: async () => {
+hydrate: async () => {
           if (get().hydrating || get().hydrated) return;
           set({ hydrating: true, hydrationError: null });
           try {
-            const [claims, docRequests, complianceQueue, escalations, kpi, auditTrail, notifications] = await Promise.all([
+            const [fetchedClaims, docRequests, complianceQueue, escalations, kpi, fetchedAudit, notifications] = await Promise.all([
               readApi.listClaims(),
               readApi.listDocRequests(),
               readApi.listComplianceQueue(),
@@ -159,12 +159,38 @@ export const useAppStore = create<AppState>()(
               readApi.listAuditTrail(),
               readApi.listNotifications(),
             ]);
-            set({ claims, docRequests, complianceQueue, escalations, kpi, auditTrail, notifications, hydrated: true, hydrating: false });
+
+            // PRESERVE LOCAL WORK: Merge backend claims with local persisted claims
+            const localClaims = get().claims;
+            const mergedClaims = fetchedClaims.map((fc) => {
+              const lc = localClaims.find((c) => c.id === fc.id);
+              // If the user has local unsubmitted decisions on this claim, keep the local version
+              if (lc && (lc.status === "partially_reviewed" || lc.status === "approved" || lc.status === "needs_correction") && lc.stage !== "submitted") {
+                return lc;
+              }
+              return fc;
+            });
+
+            // PRESERVE LOCAL AUDIT: Combine backend audit log with local client-generated events
+            const localAudit = get().auditTrail;
+            const auditMap = new Map([...fetchedAudit, ...localAudit].map(a => [a.id, a]));
+            const mergedAudit = Array.from(auditMap.values()).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+            set({ 
+              claims: mergedClaims, 
+              docRequests, 
+              complianceQueue, 
+              escalations, 
+              kpi, 
+              auditTrail: mergedAudit, 
+              notifications, 
+              hydrated: true, 
+              hydrating: false 
+            });
           } catch (e) {
             set({ hydrating: false, hydrationError: e instanceof ApiError ? e.message : "Could not load claims data." });
           }
         },
-
         selectedClaimId: null,
         selectClaim: (id) => set({ selectedClaimId: id }),
 

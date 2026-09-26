@@ -1,5 +1,5 @@
 import { ApiError, ConflictError, ValidationRejectedError } from "./errors";
-import { BASE_URL, ENDPOINTS } from "./endpoints";
+import { BASE_URL, ENDPOINTS, EVENT_RELAY_URL } from "./endpoints";
 import type { BackendEvent, ClaimsApi } from "./contracts";
 
 const TIMEOUT_MS = 20_000;
@@ -44,7 +44,7 @@ export const httpApi: ClaimsApi = {
   submitClaim: (req) => post(ENDPOINTS.submit, req, req.idempotencyKey),
   validateCode: (req) => post(ENDPOINTS.validateCode, req),
   subscribe(handler) {
-    const source = new EventSource(`${BASE_URL}${ENDPOINTS.events}`, { withCredentials: true });
+    const source = new EventSource(`${EVENT_RELAY_URL}${ENDPOINTS.events}`, { withCredentials: true });
     source.onmessage = (msg) => {
       try {
         handler(JSON.parse(msg.data) as BackendEvent);

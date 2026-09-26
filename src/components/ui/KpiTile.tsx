@@ -29,20 +29,20 @@ export function KpiTile({
   history?: KpiPoint[];
   footnote?: string;
 }) {
-  const borderClass =
+  // Breach state is carried by border color/weight and the tinted background alone — no glow or
+  // blur. Color stays reserved for meaning here, not for atmosphere. Only one bg-* class is ever
+  // present per state, so there's no same-specificity Tailwind class ordering to rely on.
+  const stateClass =
     breach === "breach"
-      ? "border-[var(--color-danger)]/40 shadow-[0_0_0_1px_rgba(251,113,133,0.08),0_0_24px_-6px_rgba(251,113,133,0.25)]"
+      ? "border-[var(--color-danger)] bg-[var(--color-danger-dim)]"
       : breach === "approaching"
-        ? "border-[var(--color-warning)]/30"
-        : "border-[var(--color-border)]";
+        ? "border-[var(--color-warning)]/50 bg-[var(--color-surface)]"
+        : "border-[var(--color-border)] bg-[var(--color-surface)]";
 
   const strokeColor = breach === "breach" ? "var(--color-danger)" : breach === "approaching" ? "var(--color-warning)" : "var(--color-accent)";
 
   return (
-    <div className={cx("relative overflow-hidden rounded-xl border bg-[var(--color-surface)] p-5 transition-colors", borderClass)}>
-      {breach === "breach" && (
-        <div className="pointer-events-none absolute -right-10 -top-10 h-32 w-32 rounded-full bg-[var(--color-danger)]/10 blur-2xl" />
-      )}
+    <div className={cx("relative overflow-hidden rounded-xl border p-5 transition-colors", stateClass)}>
       <div className="flex items-start justify-between">
         <p className="text-xs font-medium uppercase tracking-wider text-[var(--color-text-tertiary)]">{label}</p>
         <BreachBadge breach={breach} label={breachLabel} />

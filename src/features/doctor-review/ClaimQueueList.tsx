@@ -28,7 +28,10 @@ export function ClaimQueueList({ selectedId, onSelect }: { selectedId: string | 
       .filter((c) => (query ? c.patientName.toLowerCase().includes(query.toLowerCase()) || c.id.toLowerCase().includes(query.toLowerCase()) : true))
       .sort((a, b) => {
         const rank = (c: Claim) => (c.status === "pending_review" ? 0 : c.status === "partially_reviewed" ? 1 : c.status === "needs_correction" ? 2 : 3);
-        return rank(a) - rank(b) || b.reviewAgeHours - a.reviewAgeHours;
+        const scrutiny = (c: Claim) => (c.codes.some((code) => code.complexity === "high") ? 0 : 1);
+        // Within the same actionability tier, extra-scrutiny claims surface first — a rushed doctor
+        // shouldn't have to hunt for the high-complexity review buried under routine ones.
+        return rank(a) - rank(b) || scrutiny(a) - scrutiny(b) || b.reviewAgeHours - a.reviewAgeHours;
       });
   }, [claims, user.name, query]);
 
@@ -58,7 +61,7 @@ export function ClaimQueueList({ selectedId, onSelect }: { selectedId: string | 
               onClick={() => onSelect(c.id)}
               className={cx(
                 "relative block w-full border-b border-[var(--color-border)] px-4 py-3.5 text-left transition-colors",
-                isActive ? "bg-white/[0.05]" : "hover:bg-white/[0.02]",
+                isActive ? "bg-black/[0.055]" : "hover:bg-[var(--color-hover)]",
               )}
             >
               {isActive && (

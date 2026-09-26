@@ -66,7 +66,7 @@ export function TopBar() {
                     useAppStore.getState().selectClaim(c.id);
                     setQuery("");
                   }}
-                  className="flex w-full items-center justify-between px-4 py-2.5 text-left text-sm transition hover:bg-white/[0.04]"
+                  className="flex w-full items-center justify-between px-4 py-2.5 text-left text-sm transition hover:bg-[var(--color-hover)]"
                 >
                   <span className="text-[var(--color-text)]">{c.patientName}</span>
                   <span className="font-[family-name:var(--font-mono)] text-xs text-[var(--color-text-tertiary)]">{c.id}</span>
@@ -86,7 +86,7 @@ export function TopBar() {
           <span
             className={cx(
               "h-1.5 w-1.5 rounded-full",
-              health.status === "healthy" && "bg-[var(--color-success)] shadow-[0_0_6px_var(--color-success)]",
+              health.status === "healthy" && "bg-[var(--color-success)]",
               health.status === "degraded" && "bg-[var(--color-warning)]",
               health.status === "down" && "bg-[var(--color-danger)]",
             )}
@@ -99,7 +99,7 @@ export function TopBar() {
         <div className="relative">
           <button
             onClick={() => setProfileOpen((v) => !v)}
-            className="flex items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 transition hover:border-[var(--color-border)] hover:bg-white/[0.03]"
+            className="flex items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 transition hover:border-[var(--color-border)] hover:bg-[var(--color-hover)]"
           >
             <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--color-surface-3)] text-[var(--color-text-secondary)]">
               <UserCircle2 size={16} />
@@ -137,7 +137,7 @@ export function TopBar() {
                         navigate("/overview");
                       }}
                       className={cx(
-                        "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition hover:bg-white/[0.05]",
+                        "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition hover:bg-[var(--color-hover)]",
                         user.role === r ? "text-[var(--color-accent)]" : "text-[var(--color-text-secondary)]",
                       )}
                     >

@@ -69,6 +69,26 @@ export function CodeCard({
     else setEditValue(code.code);
   }
 
+  // High-volume review: a doctor going through dozens of cards a day shouldn't have to reach for
+  // the mouse for every one. Scoped to this card's own focus, and bows out of text entry entirely
+  // so typing a replacement code never gets intercepted as a shortcut.
+  function handleCardKeyDown(e: React.KeyboardEvent) {
+    const target = e.target as HTMLElement;
+    if (editing || showReason || ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName)) return;
+    if (e.metaKey || e.ctrlKey || e.altKey || disabled) return;
+    if (e.key === "a" || e.key === "A") {
+      e.preventDefault();
+      handleApprove();
+    } else if ((e.key === "r" || e.key === "R") && !code.revalidating) {
+      e.preventDefault();
+      setShowReason(true);
+    } else if ((e.key === "e" || e.key === "E") && canEdit) {
+      e.preventDefault();
+      setEditValue(code.code);
+      setEditing(true);
+    }
+  }
+
   return (
     <motion.div
       layout
@@ -77,15 +97,16 @@ export function CodeCard({
       onFocus={() => onHover(code.evidence)}
       onBlur={() => onHover(null)}
       onClick={onPin}
+      onKeyDown={handleCardKeyDown}
       tabIndex={0}
-      aria-label={`Proposed code ${code.code}, ${code.description}`}
+      aria-label={`Proposed code ${code.code}, ${code.description}. Keyboard: A to approve, R to reject, E to replace.`}
       className={cx(
         "relative rounded-xl border p-4 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/60",
         pinned && "ring-1 ring-[var(--color-accent)]/50",
         code.quarantined && "border-[var(--color-danger)]/40 bg-[var(--color-danger-dim)]/25",
         !code.quarantined && code.decision === "approved" && "border-[var(--color-success)]/30 bg-[var(--color-success-dim)]/40",
         !code.quarantined && code.decision === "rejected" && "border-[var(--color-danger)]/30 bg-[var(--color-danger-dim)]/30 opacity-90",
-        !code.quarantined && code.decision === "pending" && highComplexity && "border-[var(--color-scrutiny)]/40 bg-[var(--color-scrutiny-dim)]/20 shadow-[0_0_28px_-12px_var(--color-scrutiny)]",
+        !code.quarantined && code.decision === "pending" && highComplexity && "border-[var(--color-scrutiny)]/40 bg-[var(--color-scrutiny-dim)]/20",
         !code.quarantined && code.decision === "pending" && !highComplexity && "border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-border-strong)]",
       )}
     >
@@ -168,15 +189,20 @@ export function CodeCard({
           )}
           {code.originalCode && <span className="text-[10px] text-[var(--color-text-tertiary)]">AI proposed {code.originalCode}</span>}
         </div>
-        <div className="flex shrink-0 items-center gap-1.5 text-[11px] text-[var(--color-text-tertiary)]" title="Model confidence is not a measure of correctness.">
+        <div
+          className="flex shrink-0 items-center gap-1.5 text-[11px] text-[var(--color-text-tertiary)]"
+          title="Model confidence is not a measure of correctness. Color indicates how many codes reviewed today fall in this range, not whether this one is right."
+        >
           <span>Model confidence</span>
+          {/* Scannable at a glance across dozens of cards, not just readable one at a time. */}
+          <span className={cx("h-1.5 w-1.5 rounded-full", code.confidence >= 0.9 ? "bg-[var(--color-success)]" : code.confidence >= 0.7 ? "bg-[var(--color-warning)]" : "bg-[var(--color-danger)]")} />
           <span className="font-tabular font-medium text-[var(--color-text-secondary)]">{formatPct(code.confidence, 0)}</span>
         </div>
       </div>
 
       <p className="mt-1.5 text-sm text-[var(--color-text-secondary)]">{code.description}</p>
 
-      <div className={cx("mt-3 rounded-lg px-3 py-2", highComplexity ? "bg-[var(--color-scrutiny-dim)]/30 ring-1 ring-[var(--color-scrutiny)]/30" : "bg-black/20")}>
+      <div className={cx("mt-3 rounded-lg px-3 py-2", highComplexity ? "bg-[var(--color-scrutiny-dim)]/30 ring-1 ring-[var(--color-scrutiny)]/30" : "bg-[var(--color-well)]")}>
         <p className="text-[10px] uppercase tracking-wide text-[var(--color-text-tertiary)]">
           Supporting evidence · note characters {code.evidence.start}–{code.evidence.end}
         </p>

@@ -127,7 +127,7 @@ export function AuditTrailPage() {
                 <li key={e.id}>
                   <button
                     onClick={() => setSelected(e)}
-                    className={`relative flex w-full items-start gap-4 rounded-lg px-2 py-2.5 text-left transition ${active ? "bg-white/[0.05]" : "hover:bg-white/[0.02]"}`}
+                    className={`relative flex w-full items-start gap-4 rounded-lg px-2 py-2.5 text-left transition ${active ? "bg-black/[0.055]" : "hover:bg-[var(--color-hover)]"}`}
                   >
                     <span className={`relative z-10 mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full border-2 border-[var(--color-surface)] ${active ? "bg-[var(--color-accent)]" : "bg-[var(--color-text-tertiary)]"}`} />
                     <span className="min-w-0 flex-1">
@@ -189,7 +189,7 @@ export function AuditTrailPage() {
               {selected.metadata && Object.keys(selected.metadata).length > 0 && (
                 <div className="mt-4">
                   <p className="text-[10px] uppercase tracking-wide text-[var(--color-text-tertiary)]">Structured metadata</p>
-                  <dl className="mt-2 space-y-1.5 rounded-lg border border-[var(--color-border)] bg-black/20 p-3 text-[11px]">
+                  <dl className="mt-2 space-y-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-well)] p-3 text-[11px]">
                     {Object.entries(selected.metadata).map(([k, v]) => (
                       <div key={k} className="flex justify-between gap-4">
                         <dt className="font-[family-name:var(--font-mono)] text-[var(--color-text-tertiary)]">{k}</dt>
@@ -201,7 +201,7 @@ export function AuditTrailPage() {
               )}
 
               {selected.previousValue && selected.newValue && (
-                <div className="mt-4 rounded-lg border border-[var(--color-border)] bg-black/20 p-3">
+                <div className="mt-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-well)] p-3">
                   <p className="text-[10px] uppercase tracking-wide text-[var(--color-text-tertiary)]">Change</p>
                   <div className="mt-2 flex items-center gap-2 font-[family-name:var(--font-mono)] text-sm">
                     <span className="rounded bg-[var(--color-danger-dim)] px-2 py-0.5 text-[var(--color-danger)] line-through">{selected.previousValue}</span>
@@ -251,7 +251,7 @@ function VersionHistory({ claim }: { claim: Claim }) {
       </p>
 
       {edits.length > 0 && (
-        <div className="mt-3 space-y-2 rounded-lg border border-[var(--color-border)] bg-black/20 p-3">
+        <div className="mt-3 space-y-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-well)] p-3">
           {edits.map((c) => (
             <div key={c.code} className="text-[11px]">
               <div className="flex items-center justify-between gap-2 font-[family-name:var(--font-mono)] text-xs">

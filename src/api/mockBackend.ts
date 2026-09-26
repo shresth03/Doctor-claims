@@ -1,6 +1,20 @@
-import { CPT_POOL, ICD_POOL, MODEL_METADATA, generateDraftCodes, makeValidationGates } from "../lib/seed";
+import {
+  CPT_POOL,
+  ICD_POOL,
+  generateAuditTrail,
+  generateClaims,
+  generateComplianceQueue,
+  generateDocRequests,
+  generateDraftCodes,
+  generateEscalations,
+  generateKpiSnapshot,
+  generateNotifications,
+  makeValidationGates,
+  MODEL_METADATA,
+} from "../lib/seed";
 import { ApiError, ConflictError, REGEN_IN_PROGRESS_MESSAGE, ValidationRejectedError } from "./errors";
 import type { BackendEvent, ClaimsApi, RegenerateAccepted, SubmitClaimResult } from "./contracts";
+import type { ReadApi } from "./read";
 
 /**
  * In-browser stand-in for the n8n workflows so the UI is fully exercisable without a backend.
@@ -135,6 +149,65 @@ export const mockApi: ClaimsApi = {
 
   subscribe(handler) {
     listeners.add(handler);
+    if (!kpiSimTimer) startKpiSimulator();
     return () => listeners.delete(handler);
   },
 };
+
+// ── Read API (mock): generated once, same shape/values the live Read API returns from Postgres ──
+
+const mockClaims = generateClaims(48);
+const mockDocRequests = generateDocRequests(mockClaims, 22);
+const mockComplianceQueue = generateComplianceQueue(mockClaims, 14);
+const mockEscalations = generateEscalations(mockClaims, 6);
+const mockKpi = generateKpiSnapshot();
+const mockAuditTrail = generateAuditTrail(mockClaims, 220);
+const mockNotifications = generateNotifications(mockClaims);
+
+export const mockReadApi: ReadApi = {
+  listClaims: () => Promise.resolve(mockClaims),
+  listDocRequests: () => Promise.resolve(mockDocRequests),
+  listComplianceQueue: () => Promise.resolve(mockComplianceQueue),
+  listEscalations: () => Promise.resolve(mockEscalations),
+  listNotifications: () => Promise.resolve(mockNotifications),
+  listAuditTrail: () => Promise.resolve(mockAuditTrail),
+  getKpiSnapshot: () => Promise.resolve(mockKpi),
+};
+
+// ── Live KPI feel in mock mode ────────────────────────────────────────────────────────────────
+// The real "Claims 09 · KPI refresh" cron pushes a kpi.updated event every 5 minutes; this mirrors
+// that on a shorter, demo-friendly interval so the Observability tiles visibly move instead of
+// sitting static, using the same event the live backend emits (see store.ts's handleBackendEvent).
+let kpiSimTimer: ReturnType<typeof setInterval> | null = null;
+const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
+
+function startKpiSimulator() {
+  let editRate = mockKpi.doctorEditRate;
+  let latency = mockKpi.latencyMedianHours;
+  let denial = mockKpi.denialRateCurrent;
+
+  kpiSimTimer = setInterval(() => {
+    editRate = clamp(editRate + (Math.random() - 0.5) * 0.012, 0.08, 0.26);
+    latency = clamp(latency + (Math.random() - 0.5) * 0.8, 4, 20);
+    denial = clamp(denial + (Math.random() - 0.5) * 0.006, 0.03, 0.09);
+
+    emit({
+      type: "kpi.updated",
+      kpi: {
+        doctorEditRate: editRate,
+        doctorEditRateSampleSize: mockKpi.doctorEditRateSampleSize + Math.floor(Math.random() * 3),
+        latencyMedianHours: latency,
+        latencyP90Hours: latency * 1.9 + Math.random() * 2,
+        claimsProcessed30d: mockKpi.claimsProcessed30d,
+        pendingDoctorReviews: mockKpi.pendingDoctorReviews,
+        regenerationCount30d: mockKpi.regenerationCount30d,
+        validationFailures30d: mockKpi.validationFailures30d,
+        slaApproaching: mockKpi.slaApproaching,
+        reconciliationDiscrepancies: mockKpi.reconciliationDiscrepancies,
+        denialRateCurrent: denial,
+        denialRateBaseline: mockKpi.denialRateBaseline,
+        generatedAt: new Date().toISOString(),
+      },
+    });
+  }, 15_000);
+}

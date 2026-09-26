@@ -17,6 +17,7 @@ export function SignOffSheet({
 }) {
   const [state, setState] = useState<"idle" | "submitting" | "submitted" | "failed">("idle");
   const [error, setError] = useState<string | null>(null);
+  const [attested, setAttested] = useState(false);
 
   const approved = claim.codes.filter((c) => c.decision === "approved");
   const rejected = claim.codes.filter((c) => c.decision === "rejected");
@@ -37,6 +38,7 @@ export function SignOffSheet({
   function handleClose() {
     setState("idle");
     setError(null);
+    setAttested(false);
     onClose();
   }
 
@@ -94,13 +96,28 @@ export function SignOffSheet({
                 {claim.patientName} · {claim.id} · {approved.length} code(s) to submit
               </p>
             </div>
+
+            {/* Legal liability for an inaccurate claim sits with the signing doctor, not the model —
+                this is the explicit record of that, not just an "are you sure" confirmation. */}
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5">
+              <input
+                type="checkbox"
+                checked={attested}
+                onChange={(e) => setAttested(e.target.checked)}
+                disabled={state === "submitting"}
+                className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[var(--color-accent)]"
+              />
+              <span className="text-xs leading-relaxed text-[var(--color-text-secondary)]">
+                I attest that I have reviewed each code above and confirm this claim accurately reflects the services documented in the visit note.
+              </span>
+            </label>
           </div>
 
           <div className="mt-5 flex justify-end gap-2">
             <Button variant="secondary" size="sm" onClick={handleClose} disabled={state === "submitting"}>
               Cancel
             </Button>
-            <Button size="sm" onClick={handleConfirm} loading={state === "submitting"}>
+            <Button size="sm" onClick={handleConfirm} loading={state === "submitting"} disabled={!attested}>
               {state === "submitting" ? "Submitting…" : "Confirm & submit"}
             </Button>
           </div>

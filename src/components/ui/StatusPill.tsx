@@ -3,7 +3,7 @@ import { cx } from "../../lib/utils";
 export type Tone = "neutral" | "success" | "warning" | "danger" | "info" | "scrutiny";
 
 const TONE_CLASSES: Record<Tone, string> = {
-  neutral: "bg-white/[0.06] text-[var(--color-text-secondary)] border-white/10",
+  neutral: "bg-black/[0.05] text-[var(--color-text-secondary)] border-black/10",
   success: "bg-[var(--color-success-dim)] text-[var(--color-success)] border-emerald-400/20",
   warning: "bg-[var(--color-warning-dim)] text-[var(--color-warning)] border-amber-400/20",
   danger: "bg-[var(--color-danger-dim)] text-[var(--color-danger)] border-rose-400/20",
@@ -38,7 +38,7 @@ export function StatusPill({
 
 export function Dot({ tone = "neutral" }: { tone?: Tone }) {
   const colorMap: Record<Tone, string> = {
-    neutral: "bg-white/30",
+    neutral: "bg-black/30",
     success: "bg-[var(--color-success)]",
     warning: "bg-[var(--color-warning)]",
     danger: "bg-[var(--color-danger)]",

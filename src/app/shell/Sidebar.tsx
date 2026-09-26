@@ -34,20 +34,20 @@ export function Sidebar() {
                 {isActive && (
                   <motion.div
                     layoutId="nav-active"
-                    className="absolute inset-0 rounded-lg bg-white/[0.06]"
+                    className="absolute inset-0 rounded-lg bg-black/[0.055]"
                     transition={{ type: "spring", stiffness: 400, damping: 32 }}
                   />
                 )}
                 <item.icon size={16} strokeWidth={2} className="relative z-10 shrink-0" />
                 <span className="relative z-10 font-medium">{item.label}</span>
-                {isActive && <span className="relative z-10 ml-auto h-1.5 w-1.5 rounded-full bg-[var(--color-accent)] shadow-[0_0_8px_var(--color-accent-glow)]" />}
+                {isActive && <span className="relative z-10 ml-auto h-1.5 w-1.5 rounded-full bg-[var(--color-accent)]" />}
               </div>
             )}
           </NavLink>
         ))}
       </nav>
 
-      <div className="mx-3 mb-4 rounded-lg border border-[var(--color-border)] bg-white/[0.02] px-3.5 py-3">
+      <div className="mx-3 mb-4 rounded-lg border border-[var(--color-border)] bg-black/[0.035] px-3.5 py-3">
         <p className="text-[10px] uppercase tracking-wider text-[var(--color-text-tertiary)]">Orchestration</p>
         <p className="mt-1 text-xs text-[var(--color-text-secondary)]">n8n workflow layer connected</p>
       </div>

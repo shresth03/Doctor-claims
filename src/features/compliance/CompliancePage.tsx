@@ -83,7 +83,7 @@ export function CompliancePage() {
             </thead>
             <tbody>
               {escalations.map((e) => (
-                <tr key={e.id} onClick={() => setEscalationDetail(e)} className="cursor-pointer border-b border-[var(--color-border)] transition hover:bg-white/[0.02] last:border-b-0">
+                <tr key={e.id} onClick={() => setEscalationDetail(e)} className="cursor-pointer border-b border-[var(--color-border)] transition hover:bg-[var(--color-hover)] last:border-b-0">
                   <td className="px-4 py-3 font-[family-name:var(--font-mono)] text-xs text-[var(--color-text)]">{e.code}</td>
                   <td className="px-4 py-3 text-[var(--color-text-secondary)]">{formatPct(e.confidence, 0)}</td>
                   <td className="px-4 py-3 text-[var(--color-text-secondary)]">{e.errorType}</td>

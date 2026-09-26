@@ -92,7 +92,7 @@ export function DocumentationPage() {
                 <tr
                   key={r.id}
                   onClick={() => setSelectedId(r.id)}
-                  className="cursor-pointer border-b border-[var(--color-border)] transition hover:bg-white/[0.03] last:border-b-0"
+                  className="cursor-pointer border-b border-[var(--color-border)] transition hover:bg-[var(--color-hover)] last:border-b-0"
                 >
                   <td className="px-4 py-3">
                     <p className="font-[family-name:var(--font-mono)] text-xs text-[var(--color-text)]">{r.id}</p>

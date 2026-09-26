@@ -32,7 +32,7 @@ export function LifecycleIndicator({ stage }: { stage: ClaimStage }) {
                   "flex h-5 w-5 items-center justify-center rounded-full border text-[10px]",
                   isFailedStep && "border-[var(--color-danger)] bg-[var(--color-danger-dim)] text-[var(--color-danger)]",
                   !isFailedStep && done && "border-[var(--color-success)] bg-[var(--color-success-dim)] text-[var(--color-success)]",
-                  !isFailedStep && active && !done && "border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-accent)] shadow-[0_0_10px_var(--color-accent-glow)]",
+                  !isFailedStep && active && !done && "border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-accent)]",
                   !isFailedStep && !active && !done && "border-[var(--color-border)] text-[var(--color-text-tertiary)]",
                 )}
               >

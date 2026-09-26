@@ -1,4 +1,5 @@
-import type { Claim, ProposedCode } from "../types";
+import type { BreachState } from "../components/ui/KpiTile";
+import type { Claim, KpiPoint, ProposedCode } from "../types";
 
 const LOCKED_STATUSES: Claim["status"][] = ["submitted", "withdrawn", "expired"];
 
@@ -47,4 +48,22 @@ export function getSignOffBlockers(claim: Claim): string[] {
     blockers.push("At least one code must be approved to submit a claim.");
   }
   return blockers;
+}
+
+/**
+ * The backend/database contract stores and computes "doctor edit rate" — how often a doctor changes
+ * an AI-proposed code — because that's the number the compliance queue and the KPI-refresh workflow
+ * actually query. But displaying it under that name frames the doctor as the thing being watched.
+ * This reframes the identical number as "AI match rate" (1 - edit rate): same data, but it centers
+ * the model's performance instead of implying a doctor's decisions are under surveillance. Only the
+ * presentation layer changes here — never rename the underlying field, since that's the backend's
+ * source of truth (see n8n/README.md and Claims 09 · KPI refresh).
+ */
+export function toAiMatchRate(editRate: number, history: KpiPoint[]): { value: number; breach: BreachState; history: KpiPoint[] } {
+  const value = 1 - editRate;
+  return {
+    value,
+    breach: value < 0.8 ? "breach" : value < 0.84 ? "approaching" : "normal",
+    history: history.map((p) => ({ t: p.t, value: 1 - p.value })),
+  };
 }

@@ -41,6 +41,7 @@ export function DoctorReviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [claim, user.name, claims.length]);
 
+  const decidedCount = claim ? claim.codes.filter((c) => c.decision !== "pending").length : 0;
   const pinnedSpan = claim?.codes.find((c) => c.id === pinnedCodeId)?.evidence ?? null;
   const activeSpan = hoverSpan ?? pinnedSpan;
   const blockers = claim ? getSignOffBlockers(claim) : [];
@@ -97,20 +98,34 @@ export function DoctorReviewPage() {
                 </div>
 
                 <div className="flex min-h-0 flex-col">
+                  {/* Not inside the scrollable code list below, so this stays visible the whole time —
+                      a rushed doctor scrolling past a pending code shouldn't be able to lose track of it. */}
                   <div className="flex items-center justify-between border-b border-[var(--color-border)] px-6 py-4">
                     <div>
                       <p className="text-sm font-medium text-[var(--color-text)]">AI-proposed codes</p>
-                      <p className="text-[11px] text-[var(--color-text-tertiary)]">{claim.codes.length} codes · individual decision required for each</p>
+                      <p className="text-[11px] text-[var(--color-text-tertiary)]">
+                        <span className={decidedCount === claim.codes.length ? "font-medium text-[var(--color-success)]" : "font-medium text-[var(--color-text-secondary)]"}>
+                          {decidedCount} of {claim.codes.length} reviewed
+                        </span>{" "}
+                        · individual decision required for each
+                      </p>
                     </div>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      icon={<RefreshCw size={13} className={regenBusy ? "animate-spin" : ""} />}
-                      disabled={regenBusy}
-                      onClick={() => setRegenOpen(true)}
-                    >
-                      {regenState === "requested" ? "Requesting…" : regenState === "running" ? "Regenerating…" : "Regenerate Claim"}
-                    </Button>
+                    <div className="flex items-center gap-3">
+                      <p className="hidden text-[10px] text-[var(--color-text-tertiary)] lg:block" title="Focus a code card, then press A, R or E.">
+                        <kbd className="rounded border border-[var(--color-border)] px-1 py-0.5 font-[family-name:var(--font-mono)]">A</kbd> approve ·{" "}
+                        <kbd className="rounded border border-[var(--color-border)] px-1 py-0.5 font-[family-name:var(--font-mono)]">R</kbd> reject ·{" "}
+                        <kbd className="rounded border border-[var(--color-border)] px-1 py-0.5 font-[family-name:var(--font-mono)]">E</kbd> replace
+                      </p>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={<RefreshCw size={13} className={regenBusy ? "animate-spin" : ""} />}
+                        disabled={regenBusy}
+                        onClick={() => setRegenOpen(true)}
+                      >
+                        {regenState === "requested" ? "Requesting…" : regenState === "running" ? "Regenerating…" : "Regenerate Claim"}
+                      </Button>
+                    </div>
                   </div>
 
                   <div className="flex-1 space-y-3 overflow-y-auto px-6 py-5">

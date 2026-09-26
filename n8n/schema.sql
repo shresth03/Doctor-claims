@@ -75,18 +75,76 @@ CREATE TABLE IF NOT EXISTS claim_metrics (
 
 -- ── Insurer documentation requests ──────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS doc_requests (
-  request_id      text NOT NULL,
-  claim_id        text NOT NULL,
-  insurer         text NOT NULL,
-  patient_id      text,
-  request_type    text NOT NULL,
-  requested_docs  jsonb NOT NULL DEFAULT '[]'::jsonb,
-  priority        text NOT NULL DEFAULT 'normal',
-  status          text NOT NULL DEFAULT 'new',
-  received_at     timestamptz NOT NULL,
-  due_at          timestamptz NOT NULL,
-  escalated_at    timestamptz,
+  request_id       text NOT NULL,
+  claim_id         text NOT NULL,
+  insurer          text NOT NULL,
+  patient_id       text,
+  request_type     text NOT NULL,
+  requested_docs   jsonb NOT NULL DEFAULT '[]'::jsonb,
+  priority         text NOT NULL DEFAULT 'normal',
+  status           text NOT NULL DEFAULT 'new',
+  owner            text,
+  notes            jsonb NOT NULL DEFAULT '[]'::jsonb,   -- DocRequestNote[]
+  response_history jsonb NOT NULL DEFAULT '[]'::jsonb,   -- { at, summary }[]
+  received_at      timestamptz NOT NULL,
+  due_at           timestamptz NOT NULL,
+  escalated_at     timestamptz,
   PRIMARY KEY (claim_id, request_id)
+);
+-- CREATE TABLE IF NOT EXISTS only helps on a fresh database; these backfill columns added
+-- after doc_requests first shipped, so re-running this file against an existing database
+-- (e.g. after `git pull`) still converges to the current shape.
+ALTER TABLE doc_requests ADD COLUMN IF NOT EXISTS owner text;
+ALTER TABLE doc_requests ADD COLUMN IF NOT EXISTS notes jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE doc_requests ADD COLUMN IF NOT EXISTS response_history jsonb NOT NULL DEFAULT '[]'::jsonb;
+
+-- ── Compliance ────────────────────────────────────────────────────────────────
+-- Weekly high-complexity audit sample. Selection itself is a random 30-day sample done at
+-- seed/read time today; nothing here yet automates the actual weekly selection job.
+CREATE TABLE IF NOT EXISTS compliance_queue (
+  id                text PRIMARY KEY,
+  claim_id          text NOT NULL,
+  code              text NOT NULL,
+  doctor_name       text,
+  complexity        text NOT NULL,
+  ai_proposal       text,
+  doctor_decision   text,
+  evidence          text,
+  payer_rule        text,
+  selection_reason  text,
+  status            text NOT NULL DEFAULT 'selected',
+  workflow_version  text,
+  created_at        timestamptz NOT NULL DEFAULT now()
+);
+
+-- Confidently-wrong findings: the AI was highly confident and still wrong. Never conflate
+-- model confidence with correctness — see CompliancePage's own framing of this table.
+CREATE TABLE IF NOT EXISTS escalations (
+  id                text PRIMARY KEY,
+  claim_id          text NOT NULL,
+  code              text NOT NULL,
+  confidence        numeric NOT NULL,
+  error_type        text,
+  evidence          text,
+  final_correction  text,
+  model             jsonb NOT NULL DEFAULT '{}'::jsonb,   -- ModelMetadata
+  severity          text NOT NULL DEFAULT 'medium',
+  status            text NOT NULL DEFAULT 'open',
+  assigned_to       text,
+  findings          jsonb NOT NULL DEFAULT '[]'::jsonb,
+  occurred_at       timestamptz NOT NULL DEFAULT now()
+);
+
+-- ── KPI history ───────────────────────────────────────────────────────────────
+-- One row per KPI refresh tick. "Current" values for the three headline metrics are always
+-- computed live from claim_metrics/claims/doc_requests (see Claims 09/10); this table exists
+-- so the Observability trend charts have real history to draw instead of only ever showing
+-- a single point on a fresh database.
+CREATE TABLE IF NOT EXISTS kpi_snapshots (
+  captured_at          timestamptz PRIMARY KEY,
+  doctor_edit_rate     numeric NOT NULL,
+  denial_rate_current  numeric,
+  latency_median_hours numeric NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS notifications (

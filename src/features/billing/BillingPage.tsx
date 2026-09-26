@@ -343,7 +343,7 @@ export function BillingPage() {
               const actionable = c.status === "pending_review" || c.status === "partially_reviewed" || c.status === "needs_correction";
               const stuck = actionable && c.reviewAgeHours > 24;
               return (
-                <tr key={c.id} className="border-b border-[var(--color-border)] transition last:border-b-0 hover:bg-white/[0.02]">
+                <tr key={c.id} className="border-b border-[var(--color-border)] transition last:border-b-0 hover:bg-[var(--color-hover)]">
                   <td className="px-4 py-3">
                     <p className="text-[var(--color-text)]">{c.patientName}</p>
                     <p className="mt-0.5 font-[family-name:var(--font-mono)] text-[11px] text-[var(--color-text-tertiary)]">{c.visitId}</p>
@@ -380,7 +380,7 @@ export function BillingPage() {
                       <div className="flex justify-end gap-1">
                         <button
                           onClick={() => setActionTarget({ claim: c, kind: "withdraw" })}
-                          className="rounded-md px-2 py-1 text-xs text-[var(--color-text-tertiary)] transition hover:bg-white/5 hover:text-[var(--color-text-secondary)]"
+                          className="rounded-md px-2 py-1 text-xs text-[var(--color-text-tertiary)] transition hover:bg-[var(--color-hover)] hover:text-[var(--color-text-secondary)]"
                         >
                           Withdraw
                         </button>

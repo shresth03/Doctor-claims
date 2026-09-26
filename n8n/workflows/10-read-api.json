@@ -1,0 +1,847 @@
+{
+  "name": "Claims 10 \u00b7 Read API",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "claims/list",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "6638e078-6296-5a45-ba03-7d28414b3e61",
+      "name": "List claims requested",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "dc723953-eb0b-56e1-86dc-f7b7f6947a52"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT d.payload FROM claims c\nJOIN claim_drafts d ON d.claim_id = c.claim_id AND d.version = c.latest_version\nORDER BY c.draft_generated_at DESC",
+        "options": {}
+      },
+      "id": "47c543ad-71ff-5a8d-bc52-9c0383d8b5ca",
+      "name": "Query latest claim drafts",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((i) => ({ json: i.json.payload }));"
+      },
+      "id": "0f82c6e4-beb9-5e00-ae6b-cb6bf899d505",
+      "name": "Build claims response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($input.all().map(i => i.json)) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "4fbd6bf5-a277-5c27-a60f-f3ab7dfcb3c9",
+      "name": "Respond claims",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "claims/doc-requests",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "234a6ccb-c33f-521a-9179-e344eb7ca062",
+      "name": "Doc requests requested",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        340
+      ],
+      "webhookId": "0e0a0666-a3cb-54d4-94ca-552da40b1fb9"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM doc_requests ORDER BY due_at",
+        "options": {}
+      },
+      "id": "6693d3e0-c284-5477-a30d-c47a218300ab",
+      "name": "Query doc requests",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        340
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((i) => {\n  const r = i.json;\n  return { json: {\n    id: r.request_id, claimId: r.claim_id, insurer: r.insurer, patientId: r.patient_id,\n    requestType: r.request_type, receivedAt: r.received_at, dueAt: r.due_at, priority: r.priority,\n    status: r.status, owner: r.owner, requestedDocs: r.requested_docs, notes: r.notes, responseHistory: r.response_history,\n  } };\n});"
+      },
+      "id": "9e14cbb3-330a-52d7-ae10-cc170c72b692",
+      "name": "Build doc requests response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($input.all().map(i => i.json)) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "9d7ac235-a411-5b77-a4e8-49444b7dba7c",
+      "name": "Respond doc requests",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "claims/compliance-queue",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "52ce5d19-12df-5899-98f4-2128928d3480",
+      "name": "Compliance queue requested",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        680
+      ],
+      "webhookId": "67951673-20fa-5e59-9126-f9352a1e6d32"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM compliance_queue ORDER BY created_at DESC",
+        "options": {}
+      },
+      "id": "b50f41b8-49fa-5ffe-9e30-c4bf1b828bd6",
+      "name": "Query compliance queue",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        680
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((i) => {\n  const r = i.json;\n  return { json: {\n    id: r.id, claimId: r.claim_id, code: r.code, doctorName: r.doctor_name, complexity: r.complexity,\n    aiProposal: r.ai_proposal, doctorDecision: r.doctor_decision, evidence: r.evidence, payerRule: r.payer_rule,\n    selectionReason: r.selection_reason, status: r.status, workflowVersion: r.workflow_version,\n  } };\n});"
+      },
+      "id": "61ae9fdc-f0d8-599a-b7fe-30d476e75783",
+      "name": "Build compliance response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        680
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($input.all().map(i => i.json)) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "f5deb6e2-85a3-594e-bfba-c9715dca5ca3",
+      "name": "Respond compliance",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        680
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "claims/escalations",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "2a2b593a-f3cf-59cf-8fb5-853080701a34",
+      "name": "Escalations requested",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        1020
+      ],
+      "webhookId": "4f5d894d-422d-51c9-8253-92703fc1cd60"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM escalations ORDER BY occurred_at DESC",
+        "options": {}
+      },
+      "id": "a43bc78b-b078-50ba-b98a-74df1c12719c",
+      "name": "Query escalations",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        1020
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((i) => {\n  const r = i.json;\n  return { json: {\n    id: r.id, claimId: r.claim_id, code: r.code, confidence: Number(r.confidence), errorType: r.error_type,\n    evidence: r.evidence, finalCorrection: r.final_correction, model: r.model, timestamp: r.occurred_at,\n    severity: r.severity, status: r.status, assignedTo: r.assigned_to ?? undefined, findings: r.findings,\n  } };\n});"
+      },
+      "id": "83e22fe0-f726-5e8e-8595-7e5ed56f06c5",
+      "name": "Build escalations response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        1020
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($input.all().map(i => i.json)) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "0c0c6693-c06c-5b1b-a3fb-8ac80a08e86c",
+      "name": "Respond escalations",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        1020
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "claims/notifications",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "2a6dd5eb-f124-50b7-8479-9c209515808b",
+      "name": "Notifications requested",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        1360
+      ],
+      "webhookId": "9c2eb983-280e-536d-af50-3f24a9b5a8ec"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM notifications ORDER BY created_at DESC LIMIT 100",
+        "options": {}
+      },
+      "id": "12603c1d-f663-5fc2-8216-389dcccf6f21",
+      "name": "Query notifications",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        1360
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Read/acknowledged state is UI-session state today (mirrors how doctor code decisions aren't\n// persisted mid-review either \u2014 see Claims 02) \u2014 every fetch starts everything unread.\nreturn $input.all().map((i) => {\n  const r = i.json;\n  return { json: { id: `NTF-${r.id}`, kind: r.kind, title: r.title, message: r.message, createdAt: r.created_at, state: 'unread', claimId: r.claim_id ?? undefined, severity: r.severity } };\n});"
+      },
+      "id": "8d5ee8a7-c98a-58e4-8fe3-56e8812b61a3",
+      "name": "Build notifications response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        1360
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($input.all().map(i => i.json)) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "388022c3-f6d7-505b-a9e2-6006d64ff8f4",
+      "name": "Respond notifications",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        1360
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "claims/audit-trail",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "e35ed455-face-5d83-86f2-49a2825bcae0",
+      "name": "Audit trail requested",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        1700
+      ],
+      "webhookId": "0499f150-70d3-5b22-a011-4e0ce4350020"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM audit_events ORDER BY ts DESC LIMIT 500",
+        "options": {}
+      },
+      "id": "b015b521-225d-56ad-a952-ef520ac72c64",
+      "name": "Query audit trail",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        1700
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((i) => {\n  const r = i.json;\n  return { json: {\n    id: `EVT-${r.id}`, timestamp: r.ts, actor: r.actor, actorType: r.actor_type, event: r.event, entity: r.entity,\n    claimId: r.claim_id ?? undefined, visitId: r.visit_id ?? undefined, patientId: r.patient_id ?? undefined,\n    code: r.code ?? undefined, previousValue: r.previous_value ?? undefined, newValue: r.new_value ?? undefined,\n    runId: r.run_id, version: r.version ?? undefined, metadata: r.metadata,\n  } };\n});"
+      },
+      "id": "93b164aa-bfda-57a6-a30f-df62c9e1b9ba",
+      "name": "Build audit trail response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        1700
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($input.all().map(i => i.json)) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "fae8e567-958f-54bf-b843-b086b1cccc41",
+      "name": "Respond audit trail",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        1700
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "claims/kpi",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "ea95a131-8a50-5dbb-b0ae-61512e09a7d0",
+      "name": "KPI requested",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        2040
+      ],
+      "webhookId": "b3eabfb5-64ee-58aa-9a74-45c5c8c9ced6"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COALESCE(SUM(changed_count),0)::int AS changed, COALESCE(SUM(proposed_count),0)::int AS proposed, COUNT(*)::int AS sample_size\nFROM claim_metrics WHERE submitted_at > now() - interval '30 days'",
+        "options": {}
+      },
+      "id": "6dd03c34-d768-59d1-9ba6-fa70f88d4e63",
+      "name": "Doctor edit rate (current)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        2040
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (submitted_at - note_signed_at))/3600) AS median_hours,\n       PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (submitted_at - note_signed_at))/3600) AS p90_hours\nFROM claim_metrics WHERE submitted_at > now() - interval '30 days' AND note_signed_at IS NOT NULL",
+        "options": {}
+      },
+      "id": "1f97f50b-4e85-5ddf-8f9a-4dd353763b81",
+      "name": "Latency (current)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        2040
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  (SELECT count(*) FROM claims WHERE draft_generated_at > now() - interval '30 days')::int AS claims_processed_30d,\n  (SELECT count(*) FROM claims WHERE status IN ('pending_review','partially_reviewed'))::int AS pending_doctor_reviews,\n  (SELECT COALESCE(sum(regeneration_count),0) FROM claims WHERE draft_generated_at > now() - interval '30 days')::int AS regeneration_count_30d,\n  (SELECT count(*) FROM audit_events WHERE event = 'Code quarantined \u2014 validation failed' AND ts > now() - interval '30 days')::int AS validation_failures_30d,\n  (SELECT count(*) FROM doc_requests WHERE status NOT IN ('submitted','sla_breach') AND due_at < now() + interval '24 hours')::int AS sla_approaching,\n  (SELECT count(*) FROM audit_events WHERE event = 'Reconciliation discrepancy found' AND ts > now() - interval '30 days')::int AS reconciliation_discrepancies",
+        "options": {}
+      },
+      "id": "3da5814c-6443-591e-9daf-14f44e9a0434",
+      "name": "Pipeline counters",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        780,
+        2040
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT captured_at, doctor_edit_rate, denial_rate_current, latency_median_hours FROM kpi_snapshots ORDER BY captured_at",
+        "options": {}
+      },
+      "id": "6515caa3-7499-5f20-b66b-c54c119550d1",
+      "name": "KPI history",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1040,
+        2040
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ME",
+          "name": "Claims DB"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const edit = $('Doctor edit rate (current)').first().json;\nconst lat = $('Latency (current)').first().json;\nconst counts = $('Pipeline counters').first().json;\nconst history = $input.all().map((i) => i.json);\n\n// No 835/remittance feed exists yet (see Claims 09's own note) \u2014 the only denial-rate data\n// this system has at all is the seeded history. Use its latest point rather than invent one.\nconst lastDenial = [...history].reverse().find((h) => h.denial_rate_current != null);\nconst editRate = edit.proposed > 0 ? edit.changed / edit.proposed : (history.at(-1)?.doctor_edit_rate ?? 0);\nconst medianHours = Number(lat.median_hours ?? history.at(-1)?.latency_median_hours ?? 0);\n\nreturn [{ json: {\n  doctorEditRate: editRate,\n  doctorEditRateSampleSize: edit.sample_size || history.length,\n  doctorEditRateHistory: history.map((h) => ({ t: h.captured_at, value: Number(h.doctor_edit_rate) })),\n  denialRateCurrent: lastDenial ? Number(lastDenial.denial_rate_current) : 0,\n  denialRateBaseline: 0.058, // pre-automation reference constant \u2014 no live source for this either\n  denialRateHistory: history.filter((h) => h.denial_rate_current != null).map((h) => ({ t: h.captured_at, value: Number(h.denial_rate_current) })),\n  latencyMedianHours: medianHours,\n  latencyP90Hours: Number(lat.p90_hours ?? medianHours * 1.6),\n  latencyHistory: history.map((h) => ({ t: h.captured_at, value: Number(h.latency_median_hours) })),\n  claimsProcessed30d: counts.claims_processed_30d,\n  pendingDoctorReviews: counts.pending_doctor_reviews,\n  regenerationCount30d: counts.regeneration_count_30d,\n  validationFailures30d: counts.validation_failures_30d,\n  slaApproaching: counts.sla_approaching,\n  reconciliationDiscrepancies: counts.reconciliation_discrepancies,\n} }];"
+      },
+      "id": "070b3ff3-15d1-5a80-ac94-72fe6539f4a6",
+      "name": "Build KPI response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        2040
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "1616d790-df71-5084-a305-979e0731c95b",
+      "name": "Respond KPI",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1560,
+        2040
+      ]
+    }
+  ],
+  "connections": {
+    "List claims requested": {
+      "main": [
+        [
+          {
+            "node": "Query latest claim drafts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query latest claim drafts": {
+      "main": [
+        [
+          {
+            "node": "Build claims response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build claims response": {
+      "main": [
+        [
+          {
+            "node": "Respond claims",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Doc requests requested": {
+      "main": [
+        [
+          {
+            "node": "Query doc requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query doc requests": {
+      "main": [
+        [
+          {
+            "node": "Build doc requests response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build doc requests response": {
+      "main": [
+        [
+          {
+            "node": "Respond doc requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compliance queue requested": {
+      "main": [
+        [
+          {
+            "node": "Query compliance queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query compliance queue": {
+      "main": [
+        [
+          {
+            "node": "Build compliance response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build compliance response": {
+      "main": [
+        [
+          {
+            "node": "Respond compliance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escalations requested": {
+      "main": [
+        [
+          {
+            "node": "Query escalations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query escalations": {
+      "main": [
+        [
+          {
+            "node": "Build escalations response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build escalations response": {
+      "main": [
+        [
+          {
+            "node": "Respond escalations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notifications requested": {
+      "main": [
+        [
+          {
+            "node": "Query notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query notifications": {
+      "main": [
+        [
+          {
+            "node": "Build notifications response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build notifications response": {
+      "main": [
+        [
+          {
+            "node": "Respond notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Audit trail requested": {
+      "main": [
+        [
+          {
+            "node": "Query audit trail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query audit trail": {
+      "main": [
+        [
+          {
+            "node": "Build audit trail response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build audit trail response": {
+      "main": [
+        [
+          {
+            "node": "Respond audit trail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KPI requested": {
+      "main": [
+        [
+          {
+            "node": "Doctor edit rate (current)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Doctor edit rate (current)": {
+      "main": [
+        [
+          {
+            "node": "Latency (current)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Latency (current)": {
+      "main": [
+        [
+          {
+            "node": "Pipeline counters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pipeline counters": {
+      "main": [
+        [
+          {
+            "node": "KPI history",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KPI history": {
+      "main": [
+        [
+          {
+            "node": "Build KPI response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build KPI response": {
+      "main": [
+        [
+          {
+            "node": "Respond KPI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "id": "claimsReadApi01"
+}

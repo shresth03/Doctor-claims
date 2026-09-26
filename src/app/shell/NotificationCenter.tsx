@@ -23,7 +23,7 @@ export function NotificationCenter() {
     <div className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="relative rounded-lg p-2 text-[var(--color-text-secondary)] transition hover:bg-white/5 hover:text-[var(--color-text)]"
+        className="relative rounded-lg p-2 text-[var(--color-text-secondary)] transition hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]"
         aria-label="Notifications"
       >
         <Bell size={17} />
@@ -65,8 +65,8 @@ export function NotificationCenter() {
                         key={n.id}
                         onClick={() => markNotification(n.id, n.state === "unread" ? "read" : "acknowledged")}
                         className={cx(
-                          "flex w-full items-start gap-3 border-b border-[var(--color-border)] px-4 py-3 text-left transition hover:bg-white/[0.03]",
-                          n.state === "unread" && "bg-white/[0.02]",
+                          "flex w-full items-start gap-3 border-b border-[var(--color-border)] px-4 py-3 text-left transition hover:bg-[var(--color-hover)]",
+                          n.state === "unread" && "bg-black/[0.03]",
                         )}
                       >
                         <span
@@ -76,7 +76,7 @@ export function NotificationCenter() {
                               ? "bg-[var(--color-danger-dim)] text-[var(--color-danger)]"
                               : n.severity === "warning"
                                 ? "bg-[var(--color-warning-dim)] text-[var(--color-warning)]"
-                                : "bg-white/5 text-[var(--color-text-tertiary)]",
+                                : "bg-black/[0.05] text-[var(--color-text-tertiary)]",
                           )}
                         >
                           <Icon size={13} />

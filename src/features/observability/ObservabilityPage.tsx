@@ -3,6 +3,7 @@ import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Too
 import { useAppStore } from "../../lib/store";
 import { KpiTile } from "../../components/ui/KpiTile";
 import { formatTimestamp } from "../../lib/utils";
+import { toAiMatchRate } from "../../lib/claimRules";
 
 const PERIODS = ["7d", "30d", "90d"] as const;
 
@@ -10,7 +11,7 @@ export function ObservabilityPage() {
   const kpi = useAppStore((s) => s.kpi);
   const [period, setPeriod] = useState<(typeof PERIODS)[number]>("30d");
 
-  const editBreach = kpi.doctorEditRate > 0.2 ? "breach" : kpi.doctorEditRate > 0.16 ? "approaching" : "normal";
+  const matchRate = toAiMatchRate(kpi.doctorEditRate, kpi.doctorEditRateHistory);
   const denialBreach = kpi.denialRateCurrent > kpi.denialRateBaseline ? "breach" : "normal";
   const latencyBreach = kpi.latencyMedianHours > 24 ? "breach" : kpi.latencyMedianHours > 16 ? "approaching" : "normal";
 
@@ -50,14 +51,14 @@ export function ObservabilityPage() {
 
       <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-3">
         <KpiTile
-          label="Doctor edit rate"
-          value={kpi.doctorEditRate * 100}
+          label="AI match rate"
+          value={matchRate.value * 100}
           suffix="%"
-          breach={editBreach}
-          breachLabel={editBreach === "breach" ? "Above 20% threshold" : editBreach === "approaching" ? "Approaching threshold" : "Model trusted"}
-          trend={2.3}
-          trendDirectionGood="down"
-          history={kpi.doctorEditRateHistory.slice(-sliceLen)}
+          breach={matchRate.breach}
+          breachLabel={matchRate.breach === "breach" ? "Below 80% — review model performance" : matchRate.breach === "approaching" ? "Approaching threshold" : "Model trusted"}
+          trend={-2.3}
+          trendDirectionGood="up"
+          history={matchRate.history.slice(-sliceLen)}
           footnote={`${kpi.doctorEditRateSampleSize} codes sampled this period`}
         />
         <KpiTile
@@ -88,7 +89,7 @@ export function ObservabilityPage() {
           <div className="mt-4 h-56">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={latencyData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,0.08)" />
                 <XAxis dataKey="t" tickFormatter={(v) => formatTimestamp(v).split(",")[0]} tick={{ fontSize: 10, fill: "var(--color-text-tertiary)" }} interval={Math.ceil(sliceLen / 6)} />
                 <YAxis tick={{ fontSize: 10, fill: "var(--color-text-tertiary)" }} width={28} />
                 <RTooltip
@@ -96,7 +97,7 @@ export function ObservabilityPage() {
                   labelFormatter={(v) => formatTimestamp(v as string)}
                   formatter={(v) => [`${Number(v).toFixed(1)}h`, "Latency"]}
                 />
-                <Line type="monotone" dataKey="value" stroke="var(--color-accent)" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="value" stroke="var(--color-accent)" strokeWidth={2} dot={false} isAnimationActive={false} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -107,7 +108,7 @@ export function ObservabilityPage() {
           <p className="text-xs text-[var(--color-text-tertiary)]">Operational counters, current period</p>
           <div className="mt-4 grid grid-cols-2 gap-3">
             {secondary.map((m) => (
-              <div key={m.label} className="rounded-lg border border-[var(--color-border)] bg-black/10 px-3.5 py-3">
+              <div key={m.label} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-well)] px-3.5 py-3">
                 <p className="font-[family-name:var(--font-display)] text-xl font-semibold text-[var(--color-text)] font-tabular">{m.value}</p>
                 <p className="mt-0.5 text-[11px] text-[var(--color-text-tertiary)]">{m.label}</p>
               </div>
@@ -121,7 +122,7 @@ export function ObservabilityPage() {
         <div className="mt-4 h-40">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={kpi.doctorEditRateHistory.slice(-sliceLen)}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,0.08)" />
               <XAxis dataKey="t" tickFormatter={(v) => formatTimestamp(v).split(",")[0]} tick={{ fontSize: 10, fill: "var(--color-text-tertiary)" }} interval={Math.ceil(sliceLen / 6)} />
               <YAxis tick={{ fontSize: 10, fill: "var(--color-text-tertiary)" }} width={28} tickFormatter={(v) => `${(v * 100).toFixed(0)}%`} />
               <RTooltip
@@ -129,7 +130,7 @@ export function ObservabilityPage() {
                 labelFormatter={(v) => formatTimestamp(v as string)}
                 formatter={(v) => [`${(Number(v) * 100).toFixed(1)}%`, "Edit rate"]}
               />
-              <Bar dataKey="value" fill="var(--color-accent-dim)" radius={[3, 3, 0, 0]} />
+              <Bar dataKey="value" fill="var(--color-accent-dim)" radius={[3, 3, 0, 0]} isAnimationActive={false} />
             </BarChart>
           </ResponsiveContainer>
         </div>

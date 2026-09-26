@@ -52,7 +52,7 @@ export function Drawer({
               </div>
               <button
                 onClick={onClose}
-                className="rounded-full p-1.5 text-[var(--color-text-tertiary)] transition hover:bg-white/5 hover:text-[var(--color-text)]"
+                className="rounded-full p-1.5 text-[var(--color-text-tertiary)] transition hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]"
                 aria-label="Close"
               >
                 <X size={18} />

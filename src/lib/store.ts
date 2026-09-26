@@ -1,18 +1,8 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import {
-  generateAuditTrail,
-  generateClaims,
-  generateComplianceQueue,
-  generateDocRequests,
-  generateEscalations,
-  generateKpiSnapshot,
-  generateNotifications,
-  generateWorkflowHealth,
-  snapshotCodes,
-} from "./seed";
+import { generateWorkflowHealth, snapshotCodes } from "./seed";
 import { getSignOffBlockers, isClaimLocked, isRegenerationBusy, approvalBlocker } from "./claimRules";
-import { ApiError, ConflictError, api, configureMock } from "../api";
+import { ApiError, ConflictError, api, configureMock, readApi } from "../api";
 import type { BackendEvent } from "../api";
 import type {
   AppNotification,
@@ -24,6 +14,7 @@ import type {
   ComplianceAuditItem,
   DocRequest,
   Escalation,
+  KpiPoint,
   KpiSnapshot,
   ProposedCode,
   RejectionReason,
@@ -70,6 +61,14 @@ interface AppState {
   notifications: AppNotification[];
   workflowHealth: WorkflowHealth;
 
+  // Initial load: mock mode resolves this near-instantly from local generators; live mode fetches
+  // from the n8n Read API. Everything above starts empty/zeroed until this resolves — see AppShell
+  // for the loading screen gated on `hydrated`.
+  hydrated: boolean;
+  hydrating: boolean;
+  hydrationError: string | null;
+  hydrate: () => Promise<void>;
+
   // ui
   selectedClaimId: string | null;
   selectClaim: (id: string | null) => void;
@@ -86,14 +85,25 @@ interface AppState {
   updateDocRequestStatus: (id: string, status: DocRequest["status"], summary?: string) => void;
 }
 
-const claims = generateClaims(48);
-const docRequests = generateDocRequests(claims, 22);
-const complianceQueue = generateComplianceQueue(claims, 14);
-const escalations = generateEscalations(claims, 6);
-const kpi = generateKpiSnapshot();
-const auditTrail = generateAuditTrail(claims, 220);
-const notifications = generateNotifications(claims);
 const workflowHealth = generateWorkflowHealth();
+
+const EMPTY_KPI: KpiSnapshot = {
+  doctorEditRate: 0,
+  doctorEditRateSampleSize: 0,
+  doctorEditRateHistory: [],
+  denialRateCurrent: 0,
+  denialRateBaseline: 0,
+  denialRateHistory: [],
+  latencyMedianHours: 0,
+  latencyP90Hours: 0,
+  latencyHistory: [],
+  claimsProcessed30d: 0,
+  pendingDoctorReviews: 0,
+  regenerationCount30d: 0,
+  validationFailures30d: 0,
+  slaApproaching: 0,
+  reconciliationDiscrepancies: 0,
+};
 
 const ROLE_NAMES: Record<Role, string> = {
   doctor: "Dr. Amara Osei",
@@ -124,14 +134,36 @@ export const useAppStore = create<AppState>()(
         user: { id: "u_1", name: ROLE_NAMES.doctor, role: "doctor", facility: "Ridgeview Clinic — Main" },
         setRole: (role) => set((s) => ({ user: { ...s.user, role, name: ROLE_NAMES[role] } })),
 
-        claims,
-        docRequests,
-        complianceQueue,
-        escalations,
-        kpi,
-        auditTrail,
-        notifications,
+        claims: [],
+        docRequests: [],
+        complianceQueue: [],
+        escalations: [],
+        kpi: EMPTY_KPI,
+        auditTrail: [],
+        notifications: [],
         workflowHealth,
+
+        hydrated: false,
+        hydrating: false,
+        hydrationError: null,
+        hydrate: async () => {
+          if (get().hydrating || get().hydrated) return;
+          set({ hydrating: true, hydrationError: null });
+          try {
+            const [claims, docRequests, complianceQueue, escalations, kpi, auditTrail, notifications] = await Promise.all([
+              readApi.listClaims(),
+              readApi.listDocRequests(),
+              readApi.listComplianceQueue(),
+              readApi.listEscalations(),
+              readApi.getKpiSnapshot(),
+              readApi.listAuditTrail(),
+              readApi.listNotifications(),
+            ]);
+            set({ claims, docRequests, complianceQueue, escalations, kpi, auditTrail, notifications, hydrated: true, hydrating: false });
+          } catch (e) {
+            set({ hydrating: false, hydrationError: e instanceof ApiError ? e.message : "Could not load claims data." });
+          }
+        },
 
         selectedClaimId: null,
         selectClaim: (id) => set({ selectedClaimId: id }),
@@ -404,17 +436,26 @@ export const useAppStore = create<AppState>()(
     {
       name: "meridian-claims-storage",
       partialize: (state) => ({
+        // We persist data locally to guard against immediate reloads losing pending work, 
+        // but hydrate() will silently override this with live data from the DB if configured
         claims: state.claims,
         auditTrail: state.auditTrail,
         notifications: state.notifications,
         docRequests: state.docRequests,
         complianceQueue: state.complianceQueue,
         escalations: state.escalations,
+        kpi: state.kpi,
       }),
     }
   )
 );
+
 // ── Backend → UI events (SSE in live mode, in-process in mock mode) ─────────────────────────────
+
+/** Appends a live point to a trend array and trims it so it can't grow unbounded across a long session. */
+function appendKpiPoint(history: KpiPoint[], t: string, value: number, max = 90): KpiPoint[] {
+  return [...history, { t, value }].slice(-max);
+}
 
 function handleBackendEvent(event: BackendEvent) {
   const { getState, setState } = useAppStore;
@@ -498,6 +539,34 @@ function handleBackendEvent(event: BackendEvent) {
       }));
       break;
     }
+
+    case "kpi.updated": {
+      const k = event.kpi;
+      setState((s) => ({
+        kpi: {
+          ...s.kpi,
+          doctorEditRate: k.doctorEditRate,
+          doctorEditRateSampleSize: k.doctorEditRateSampleSize,
+          doctorEditRateHistory: appendKpiPoint(s.kpi.doctorEditRateHistory, k.generatedAt, k.doctorEditRate),
+          latencyMedianHours: k.latencyMedianHours,
+          latencyP90Hours: k.latencyP90Hours,
+          latencyHistory: appendKpiPoint(s.kpi.latencyHistory, k.generatedAt, k.latencyMedianHours),
+          // A null denial rate means "no remittance feed yet" (see the KPI-refresh workflow), never "zero" —
+          // keep whatever the UI already had rather than overwrite it with missing data.
+          denialRateCurrent: k.denialRateCurrent ?? s.kpi.denialRateCurrent,
+          denialRateBaseline: k.denialRateBaseline ?? s.kpi.denialRateBaseline,
+          denialRateHistory:
+            k.denialRateCurrent != null ? appendKpiPoint(s.kpi.denialRateHistory, k.generatedAt, k.denialRateCurrent) : s.kpi.denialRateHistory,
+          claimsProcessed30d: k.claimsProcessed30d,
+          pendingDoctorReviews: k.pendingDoctorReviews,
+          regenerationCount30d: k.regenerationCount30d,
+          validationFailures30d: k.validationFailures30d,
+          slaApproaching: k.slaApproaching,
+          reconciliationDiscrepancies: k.reconciliationDiscrepancies,
+        },
+      }));
+      break;
+    }
   }
 }
 
@@ -508,3 +577,4 @@ configureMock({
   },
 });
 api.subscribe(handleBackendEvent);
+void useAppStore.getState().hydrate();
